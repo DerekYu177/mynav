@@ -372,10 +372,13 @@ func (g *GlobalSearch) init() {
 				a.sessions.selectSession(item.session)
 				a.sessions.focus()
 			case item.workspace != nil:
-				a.topics.selectTopic(item.workspace.Topic)
-				a.workspaces.refresh()
-				a.workspaces.selectWorkspace(item.workspace)
-				a.workspaces.focus()
+				// workspaces view is gone; if the workspace has a session, focus it.
+				if s := a.api.Session(item.workspace); s != nil {
+					a.sessions.selectSession(s)
+					a.sessions.focus()
+				} else {
+					toast("No active session for "+item.workspace.ShortPath(), toastWarn)
+				}
 			}
 		},
 		onSelectDescription: "Go to item",

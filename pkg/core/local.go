@@ -10,7 +10,8 @@ import (
 
 // Data for the local config store.
 type LocalConfigData struct {
-	SelectedWorkspace string `json:"selected-workspace"`
+	SelectedWorkspace string            `json:"selected-workspace"`
+	SessionComments   map[string]string `json:"session-comments,omitempty"`
 }
 
 // LocalConfig is the LocalConfig configuration.
@@ -114,6 +115,30 @@ func (c *LocalConfig) detect() (string, error) {
 func (g *LocalConfig) SetSelectedWorkspace(s string) {
 	data := g.datasource.Get()
 	data.SelectedWorkspace = s
+	g.datasource.Save(data)
+}
+
+// SessionComment returns the saved comment for the named tmux session, or "".
+func (g *LocalConfig) SessionComment(name string) string {
+	data := g.datasource.Get()
+	if data.SessionComments == nil {
+		return ""
+	}
+	return data.SessionComments[name]
+}
+
+// SetSessionComment persists a comment for the named tmux session. An empty
+// comment removes the entry.
+func (g *LocalConfig) SetSessionComment(name, comment string) {
+	data := g.datasource.Get()
+	if data.SessionComments == nil {
+		data.SessionComments = map[string]string{}
+	}
+	if comment == "" {
+		delete(data.SessionComments, name)
+	} else {
+		data.SessionComments[name] = comment
+	}
 	g.datasource.Save(data)
 }
 

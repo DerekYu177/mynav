@@ -2,6 +2,7 @@ package core
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"github.com/GianlucaP106/gotmux/gotmux"
@@ -275,6 +276,120 @@ func (a *API) OpenWorkspace(w *Workspace) error {
 	}
 
 	return session.Attach()
+}
+
+// ActivePaneCapture captures the contents of the active pane in the active
+// window of the session. Returns "" if the session is gone or capture fails.
+func (s *Session) ActivePaneCapture() string {
+	if s == nil || s.Session == nil {
+		return ""
+	}
+	windows, err := s.ListWindows()
+	if err != nil {
+		return ""
+	}
+	for _, w := range windows {
+		if !w.Active {
+			continue
+		}
+		panes, err := w.ListPanes()
+		if err != nil {
+			return ""
+		}
+		for _, p := range panes {
+			if p.Active {
+				out, _ := p.Capture()
+				return out
+			}
+		}
+	}
+	return ""
+}
+
+// ActivePaneID returns the tmux pane id (e.g. "%17") of the active pane in
+// the active window. Returns "" if it can't be resolved.
+func (s *Session) ActivePaneID() string {
+	if s == nil || s.Session == nil {
+		return ""
+	}
+	windows, err := s.ListWindows()
+	if err != nil {
+		return ""
+	}
+	for _, w := range windows {
+		if !w.Active {
+			continue
+		}
+		panes, err := w.ListPanes()
+		if err != nil {
+			return ""
+		}
+		for _, p := range panes {
+			if p.Active {
+				return p.Id
+			}
+		}
+	}
+	return ""
+}
+
+// ClaudeStatus returns the detected Claude state for the session's active pane.
+func (a *API) ClaudeStatus(s *Session) ClaudeStatus {
+	if s == nil {
+		return ClaudeDead
+	}
+	return DetectClaudeStatus(s.ActivePaneCapture())
+}
+
+// AttachZoomed attaches to the session, ensuring the active pane is zoomed
+// in the active window. Returns an error if attach fails.
+func (a *API) AttachZoomed(s *Session) error {
+	if s == nil {
+		return nil
+	}
+
+	// find active window + pane and zoom it before attaching
+	windows, err := s.ListWindows()
+	if err == nil {
+		for _, w := range windows {
+			if !w.Active {
+				continue
+			}
+			panes, err := w.ListPanes()
+			if err != nil {
+				break
+			}
+			for _, p := range panes {
+				if !p.Active {
+					continue
+				}
+				_ = p.SelectPane(nil)
+				if !w.ZoomedFlag {
+					_ = exec.Command("tmux", "resize-pane", "-t", p.Id, "-Z").Run()
+				}
+				break
+			}
+			break
+		}
+	}
+
+	return s.Attach()
+}
+
+// SessionComment returns the saved comment for a session, keyed by tmux name.
+func (a *API) SessionComment(s *Session) string {
+	if s == nil {
+		return ""
+	}
+	return a.local.SessionComment(s.Name)
+}
+
+// SetSessionComment persists a comment for a session, keyed by tmux name.
+func (a *API) SetSessionComment(s *Session, comment string) {
+	if s == nil {
+		return
+	}
+	a.local.SetSessionComment(s.Name, comment)
 }
 
 func (a *API) NewSession(name string) (*Session, error) {
