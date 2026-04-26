@@ -24,9 +24,28 @@ func newCli() *Cli {
 }
 
 func (cli *Cli) run() {
+	// Subcommands run before flag.Parse so `mynav hook <event>`
+	// (invoked by Claude Code) doesn't accidentally start the TUI.
+	if handleSubcommand(os.Args[1:]) {
+		os.Exit(0)
+	}
 	cli.parseArgs()
 	cli.handleVersionFlag()
 	cli.handlePathFlag()
+}
+
+// handleSubcommand dispatches positional subcommands. Returns true
+// when a subcommand ran and the caller should exit.
+func handleSubcommand(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	switch args[0] {
+	case "hook":
+		runHookCommand(args[1:])
+		return true
+	}
+	return false
 }
 
 func (cli *Cli) parseArgs() {
