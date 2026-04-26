@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/GianlucaP106/mynav/pkg/core"
@@ -11,46 +12,74 @@ import (
 	"github.com/gookit/color"
 )
 
-// Sessions view displaying active workspace sessions.
+// Sessions view rendering active workspace sessions as a 2-D grid of cells.
 type Sessions struct {
-	view  *tui.View
-	table *tui.TableRenderer[*core.Session]
+	view *tui.View
 
-	// loading flag to display loading (not atomic as it should only be touched in the mainloop)
+	// cells, ordered for stable position (oldest → newest by tmux session_created)
+	cells []*core.Session
+
+	// currently highlighted cell
+	selIdx int
+
+	// columns the most recent render used (set by render(), read by hjkl)
+	cols int
+
+	// loading flag (only touched on the mainloop)
 	loading bool
 
 	// to kill the status-refresh routine
 	done chan bool
 }
 
+// Cell layout constants. The cell is a 22-wide / 5-tall box with its own
+// border drawn from box-drawing runes; cells are separated by a single
+// blank column. At a typical 180-col terminal that fits 7 cells per row.
+const (
+	cellWidth   = 22
+	cellHeight  = 5
+	cellGutterX = 1
+	cellGutterY = 0
+)
+
+var (
+	cellBorderColor   = color.New(color.FgDarkGray)
+	cellSelectedColor = color.New(color.FgGreen, color.Bold)
+
+	statusRunningColor    = color.New(color.FgGreen, color.Bold)
+	statusNeedsInputColor = color.New(color.FgYellow, color.Bold)
+	statusIdleColor       = color.New(color.FgWhite)
+	statusErrorColor      = color.New(color.FgRed, color.Bold)
+	statusDeadColor       = color.New(color.FgDarkGray)
+)
+
 func newSessionsView() *Sessions {
-	s := &Sessions{
+	return &Sessions{
 		done: make(chan bool),
 	}
-	return s
 }
 
 func (s *Sessions) selected() *core.Session {
-	_, session := s.table.SelectedRow()
-	if session != nil {
-		return session.Value
+	if s.selIdx < 0 || s.selIdx >= len(s.cells) {
+		return nil
 	}
-	return nil
+	return s.cells[s.selIdx]
 }
 
-func (s *Sessions) selectSession(session *core.Session) {
-	s.table.SelectRowByValue(func(session2 *core.Session) bool {
-		return session2.Name == session.Name
-	})
+func (s *Sessions) selectSession(target *core.Session) {
+	if target == nil {
+		return
+	}
+	for i, c := range s.cells {
+		if c.Name == target.Name {
+			s.selIdx = i
+			return
+		}
+	}
 }
 
-func (s *Sessions) getLoading() bool {
-	return s.loading
-}
-
-func (s *Sessions) setLoading(b bool) {
-	s.loading = b
-}
+func (s *Sessions) getLoading() bool { return s.loading }
+func (s *Sessions) setLoading(b bool) { s.loading = b }
 
 func (s *Sessions) refreshPreview() {
 	session := s.selected()
@@ -58,7 +87,6 @@ func (s *Sessions) refreshPreview() {
 		a.preview.setSession(nil)
 		return
 	}
-
 	a.preview.setSession(session)
 }
 
@@ -68,65 +96,163 @@ func (s *Sessions) focus() {
 }
 
 func (s *Sessions) refreshDown() {
-	a.comment.show(s.selected())
 	a.worker.Queue(func() {
 		s.refreshPreview()
 		a.ui.Update(func() {
 			a.preview.render()
-			a.comment.render()
 		})
 	})
 }
 
 func (s *Sessions) refresh() {
 	sessions := a.api.AllSessions()
-	// sort by last attached
+	// Sort by created time (oldest first) so cells keep stable positions
+	// across refreshes — new sessions appear at the end without shuffling
+	// the existing layout.
 	sort.Slice(sessions, func(i, j int) bool {
-		t1 := core.UnixTime(sessions[i].LastAttached)
-		t2 := core.UnixTime(sessions[j].LastAttached)
-		return t1.After(t2)
+		t1 := core.UnixTime(sessions[i].Created)
+		t2 := core.UnixTime(sessions[j].Created)
+		return t1.Before(t2)
 	})
-
-	// fill table
-	tableRows := make([]*tui.TableRow[*core.Session], 0)
-	for _, s := range sessions {
-		timeStr := core.TimeAgo(core.UnixTime(s.LastAttached))
-		status := a.api.ClaudeStatus(s)
-		tableRows = append(tableRows, &tui.TableRow[*core.Session]{
-			Cols: []string{
-				s.DisplayName(),
-				status.String(),
-				timeStr,
-			},
-			Value: s,
-		})
+	s.cells = sessions
+	if s.selIdx >= len(s.cells) {
+		s.selIdx = max(0, len(s.cells)-1)
 	}
-	s.table.Fill(tableRows)
+	if s.selIdx < 0 {
+		s.selIdx = 0
+	}
 }
 
 func (s *Sessions) render() {
 	s.view.Clear()
 	a.ui.Resize(s.view, getViewPosition(s.view.Name()))
 
-	// update page row marker
-	row, _ := s.table.SelectedRow()
-	size := s.table.Size()
-	s.view.Subtitle = fmt.Sprintf(" %d / %d ", min(row+1, size), size)
+	sx, _ := s.view.Size()
+	cols := (sx + cellGutterX) / (cellWidth + cellGutterX)
+	if cols < 1 {
+		cols = 1
+	}
+	s.cols = cols
+
+	s.view.Subtitle = fmt.Sprintf(" %d sessions ", len(s.cells))
 
 	if s.getLoading() {
 		fmt.Fprintln(s.view, "Loading...")
 		return
 	}
 
-	// renders table and updates only the last-attached column. Claude status
-	// is captured by refresh() (off the render path) because it shells out to
-	// tmux capture-pane and would be too expensive on every frame.
+	if len(s.cells) == 0 {
+		fmt.Fprintln(s.view, " No sessions yet — press 'a' to create one")
+		return
+	}
+
 	isFocused := a.ui.IsFocused(s.view)
-	s.table.RenderTable(s.view, func(i int, tr *tui.TableRow[*core.Session]) bool {
-		return isFocused
-	}, func(i int, tr *tui.TableRow[*core.Session]) {
-		tr.Cols[len(tr.Cols)-1] = core.TimeAgo(core.UnixTime(tr.Value.LastAttached))
-	})
+
+	gutter := strings.Repeat(" ", cellGutterX)
+	for start := 0; start < len(s.cells); start += cols {
+		end := start + cols
+		if end > len(s.cells) {
+			end = len(s.cells)
+		}
+
+		// Render every cell in this row of cells, then interleave by line.
+		row := make([][]string, 0, end-start)
+		for i := start; i < end; i++ {
+			row = append(row, s.renderCell(s.cells[i], isFocused && i == s.selIdx))
+		}
+
+		for line := 0; line < cellHeight; line++ {
+			parts := make([]string, len(row))
+			for ci, cell := range row {
+				parts[ci] = cell[line]
+			}
+			fmt.Fprintln(s.view, strings.Join(parts, gutter))
+		}
+
+		for g := 0; g < cellGutterY && end < len(s.cells); g++ {
+			fmt.Fprintln(s.view)
+		}
+	}
+}
+
+// renderCell returns the cellHeight strings that visually compose one cell.
+func (s *Sessions) renderCell(sess *core.Session, selected bool) []string {
+	border := cellBorderColor
+	if selected {
+		border = cellSelectedColor
+	}
+
+	// Inner content width — every line below must visually occupy this many
+	// runes. The vertical edges are added afterwards.
+	inner := cellWidth - 2
+
+	icon := statusIcon(a.api.ClaudeStatus(sess))
+	name := truncateRunes(sess.DisplayName(), 15)
+	nameStyled := workspaceNameColor.Sprint(padRightRunes(name, 15))
+
+	// "  name(15)  icon  " — 1 + 15 + 2 + 1 + 1 = 20 ✓
+	line1 := " " + nameStyled + "  " + icon + " "
+
+	commentRaw := a.api.SessionComment(sess)
+	commentColor := workspaceNameColor
+	if commentRaw == "" {
+		commentRaw = "(no note)"
+		commentColor = timestampColor
+	}
+	commentText := padRightRunes(truncateRunes(commentRaw, inner-2), inner-2)
+	line2 := " " + commentColor.Sprint(commentText) + " "
+
+	tsRaw := core.TimeAgo(core.UnixTime(sess.LastAttached))
+	tsText := padRightRunes(truncateRunes(tsRaw, inner-2), inner-2)
+	line3 := " " + timestampColor.Sprint(tsText) + " "
+
+	top := border.Sprint("┌" + strings.Repeat("─", inner) + "┐")
+	bot := border.Sprint("└" + strings.Repeat("─", inner) + "┘")
+	edge := border.Sprint("│")
+
+	return []string{
+		top,
+		edge + line1 + edge,
+		edge + line2 + edge,
+		edge + line3 + edge,
+		bot,
+	}
+}
+
+func statusIcon(s core.ClaudeStatus) string {
+	switch s {
+	case core.ClaudeRunning:
+		return statusRunningColor.Sprint("●")
+	case core.ClaudeNeedsInput:
+		return statusNeedsInputColor.Sprint("●")
+	case core.ClaudeIdle:
+		return statusIdleColor.Sprint("○")
+	case core.ClaudeError:
+		return statusErrorColor.Sprint("●")
+	case core.ClaudeDead:
+		fallthrough
+	default:
+		return statusDeadColor.Sprint("·")
+	}
+}
+
+func truncateRunes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n])
+}
+
+func padRightRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) >= n {
+		return s
+	}
+	return s + strings.Repeat(" ", n-len(r))
 }
 
 func (s *Sessions) attach(session *core.Session) {
@@ -144,8 +270,8 @@ func (s *Sessions) attach(session *core.Session) {
 		toast(err.Error(), toastError)
 	} else {
 		timeTaken := time.Since(start)
-		s := fmt.Sprintf("Detached session %s - %s active", session.DisplayName(), core.TimeDeltaStr(timeTaken))
-		toast(s, toastInfo)
+		msg := fmt.Sprintf("Detached session %s - %s active", session.DisplayName(), core.TimeDeltaStr(timeTaken))
+		toast(msg, toastInfo)
 	}
 
 	a.refresh(session)
@@ -156,53 +282,76 @@ func (s *Sessions) init() {
 	s.view.Title = " Sessions "
 	a.styleView(s.view)
 
-	sizeX, sizeY := s.view.Size()
-	titles := []string{
-		"Name",
-		"Status",
-		"Last Attached",
+	left := func() {
+		if len(s.cells) == 0 || s.cols == 0 {
+			return
+		}
+		if s.selIdx%s.cols == 0 {
+			return
+		}
+		s.selIdx--
+		s.refreshDown()
 	}
-	proportions := []float64{
-		0.45,
-		0.30,
-		0.25,
+	right := func() {
+		if len(s.cells) == 0 || s.cols == 0 {
+			return
+		}
+		if s.selIdx == len(s.cells)-1 {
+			return
+		}
+		if (s.selIdx+1)%s.cols == 0 {
+			return
+		}
+		s.selIdx++
+		s.refreshDown()
 	}
-	styles := []color.Style{
-		workspaceNameColor,
-		sessionMarkerColor,
-		timestampColor,
-	}
-	s.table = tui.NewTableRenderer[*core.Session]()
-	s.table.Init(sizeX, sizeY, titles, proportions)
-	s.table.SetStyles(styles)
-
 	down := func() {
-		s.table.Down()
+		if len(s.cells) == 0 || s.cols == 0 {
+			return
+		}
+		next := s.selIdx + s.cols
+		if next >= len(s.cells) {
+			return
+		}
+		s.selIdx = next
 		s.refreshDown()
 	}
 	up := func() {
-		s.table.Up()
+		if len(s.cells) == 0 || s.cols == 0 {
+			return
+		}
+		prev := s.selIdx - s.cols
+		if prev < 0 {
+			return
+		}
+		s.selIdx = prev
 		s.refreshDown()
 	}
+
 	a.ui.KeyBinding(s.view).
+		Set('h', "Move left", left).
+		Set('l', "Move right", right).
 		Set('j', "Move down", down).
 		Set('k', "Move up", up).
+		Set(gocui.KeyArrowLeft, "Move left", left).
+		Set(gocui.KeyArrowRight, "Move right", right).
 		Set(gocui.KeyArrowDown, "Move down", down).
 		Set(gocui.KeyArrowUp, "Move up", up).
-		Set('g', "Go to top", func() {
-			s.table.Top()
+		Set('g', "Go to first", func() {
+			s.selIdx = 0
 			s.refreshDown()
 		}).
-		Set('G', "Go to bottom", func() {
-			s.table.Bottom()
+		Set('G', "Go to last", func() {
+			if len(s.cells) > 0 {
+				s.selIdx = len(s.cells) - 1
+			}
 			s.refreshDown()
 		}).
-		Set(gocui.KeyEnter, "Open Session", func() {
+		Set(gocui.KeyEnter, "Open session", func() {
 			session := s.selected()
 			if session == nil {
 				return
 			}
-
 			s.attach(session)
 		}).
 		Set('D', "Kill session", func() {
@@ -214,17 +363,15 @@ func (s *Sessions) init() {
 				if !b {
 					return
 				}
-
 				if err := session.Kill(); err != nil {
 					toast(err.Error(), toastError)
 					return
 				}
-
 				a.refresh(session)
 				toast("Killed session "+session.DisplayName(), toastInfo)
 			}, fmt.Sprintf("Are you sure you want to delete session for %s?", session.DisplayName()))
 		}).
-		Set('a', "Create a Sesssion", func() {
+		Set('a', "Create a session", func() {
 			editor(func(name string) {
 				session, err := a.api.NewSession(name)
 				if err != nil {
@@ -270,17 +417,16 @@ func (s *Sessions) init() {
 			current := a.api.SessionComment(session)
 			editor(func(text string) {
 				a.api.SetSessionComment(session, text)
-				a.comment.show(session)
-				a.comment.render()
+				s.render()
 			}, func() {}, "Note", largeEditorSize, current)
 		}).
 		Set('?', "Toggle cheatsheet", func() {
 			help(s.view)
 		})
 
-	// periodically re-capture pane content and refresh claude status. Runs
-	// off the UI thread; refresh() will reorder by LastAttached so we
-	// preserve the user's selection across re-fills.
+	// Periodic status refresh. The ticker reorders cells by created time
+	// so we re-pin the selected session by name each tick — the user's
+	// cursor doesn't drift when statuses or attach times change.
 	go func() {
 		t := time.NewTicker(3 * time.Second)
 		defer t.Stop()
