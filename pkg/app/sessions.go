@@ -240,16 +240,19 @@ func (s *Sessions) renderCell(sess *core.Session, status core.ClaudeStatus, sele
 	}
 }
 
+// Each state gets a distinct glyph so the icon is readable at a
+// glance (and accessible to color-blind users) — color reinforces
+// the shape rather than carrying the whole signal.
 func statusIcon(s core.ClaudeStatus) string {
 	switch s {
 	case core.ClaudeRunning:
 		return statusRunningColor.Sprint("●")
 	case core.ClaudeNeedsInput:
-		return statusNeedsInputColor.Sprint("●")
+		return statusNeedsInputColor.Sprint("◆")
 	case core.ClaudeIdle:
 		return statusIdleColor.Sprint("○")
 	case core.ClaudeError:
-		return statusErrorColor.Sprint("●")
+		return statusErrorColor.Sprint("✗")
 	case core.ClaudeDead:
 		fallthrough
 	default:
