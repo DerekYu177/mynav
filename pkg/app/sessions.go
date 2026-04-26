@@ -234,6 +234,23 @@ func (s *Sessions) init() {
 				s.attach(session)
 			}, func() {}, "Session Name", smallEditorSize, "")
 		}).
+		Set('e', "Enter pane (zoomed)", func() {
+			session := s.selected()
+			if session == nil {
+				return
+			}
+			if core.IsTmuxSession() {
+				toast("A tmux session is already active", toastWarn)
+				return
+			}
+			err := a.runAction(func() error {
+				return a.api.AttachZoomed(session)
+			})
+			if err != nil {
+				toast(err.Error(), toastError)
+			}
+			a.refresh(session)
+		}).
 		Set('c', "Approve Claude prompt", func() {
 			session := s.selected()
 			if session == nil {

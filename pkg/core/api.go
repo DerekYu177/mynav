@@ -2,6 +2,7 @@ package core
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"github.com/GianlucaP106/gotmux/gotmux"
@@ -338,6 +339,41 @@ func (a *API) ClaudeStatus(s *Session) ClaudeStatus {
 		return ClaudeDead
 	}
 	return DetectClaudeStatus(s.ActivePaneCapture())
+}
+
+// AttachZoomed attaches to the session, ensuring the active pane is zoomed
+// in the active window. Returns an error if attach fails.
+func (a *API) AttachZoomed(s *Session) error {
+	if s == nil {
+		return nil
+	}
+
+	// find active window + pane and zoom it before attaching
+	windows, err := s.ListWindows()
+	if err == nil {
+		for _, w := range windows {
+			if !w.Active {
+				continue
+			}
+			panes, err := w.ListPanes()
+			if err != nil {
+				break
+			}
+			for _, p := range panes {
+				if !p.Active {
+					continue
+				}
+				_ = p.SelectPane(nil)
+				if !w.ZoomedFlag {
+					_ = exec.Command("tmux", "resize-pane", "-t", p.Id, "-Z").Run()
+				}
+				break
+			}
+			break
+		}
+	}
+
+	return s.Attach()
 }
 
 // SessionComment returns the saved comment for a session, keyed by tmux name.
