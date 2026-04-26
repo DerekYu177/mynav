@@ -19,7 +19,7 @@ const (
 	detailsWidth  = 36
 	detailsHeight = 4
 	detailsMarginX = 2
-	detailsMarginY = 1
+	detailsMarginY = 0
 )
 
 // Dialogs.
