@@ -3,7 +3,6 @@ package app
 import (
 	"fmt"
 	"sort"
-	"strconv"
 	"time"
 
 	"github.com/GianlucaP106/mynav/pkg/core"
@@ -19,10 +18,15 @@ type Sessions struct {
 
 	// loading flag to display loading (not atomic as it should only be touched in the mainloop)
 	loading bool
+
+	// to kill the status-refresh routine
+	done chan bool
 }
 
 func newSessionsView() *Sessions {
-	s := &Sessions{}
+	s := &Sessions{
+		done: make(chan bool),
+	}
 	return s
 }
 
@@ -87,15 +91,11 @@ func (s *Sessions) refresh() {
 	tableRows := make([]*tui.TableRow[*core.Session], 0)
 	for _, s := range sessions {
 		timeStr := core.TimeAgo(core.UnixTime(s.LastAttached))
-		var wMarker string
-		if s.Workspace != nil {
-			wMarker = "Yes"
-		}
+		status := a.api.ClaudeStatus(s)
 		tableRows = append(tableRows, &tui.TableRow[*core.Session]{
 			Cols: []string{
 				s.DisplayName(),
-				strconv.Itoa(s.Windows),
-				wMarker,
+				status.String(),
 				timeStr,
 			},
 			Value: s,
@@ -118,13 +118,14 @@ func (s *Sessions) render() {
 		return
 	}
 
-	// renders table and updates the last modified time
+	// renders table and updates only the last-attached column. Claude status
+	// is captured by refresh() (off the render path) because it shells out to
+	// tmux capture-pane and would be too expensive on every frame.
 	isFocused := a.ui.IsFocused(s.view)
 	s.table.RenderTable(s.view, func(i int, tr *tui.TableRow[*core.Session]) bool {
 		return isFocused
 	}, func(i int, tr *tui.TableRow[*core.Session]) {
-		newTime := core.TimeAgo(core.UnixTime(tr.Value.LastAttached))
-		tr.Cols[len(tr.Cols)-1] = newTime
+		tr.Cols[len(tr.Cols)-1] = core.TimeAgo(core.UnixTime(tr.Value.LastAttached))
 	})
 }
 
@@ -158,19 +159,16 @@ func (s *Sessions) init() {
 	sizeX, sizeY := s.view.Size()
 	titles := []string{
 		"Name",
-		"Windows",
-		"Workspace",
+		"Status",
 		"Last Attached",
 	}
 	proportions := []float64{
-		0.40,
-		0.15,
-		0.15,
+		0.45,
 		0.30,
+		0.25,
 	}
 	styles := []color.Style{
 		workspaceNameColor,
-		sessionMarkerColor,
 		sessionMarkerColor,
 		timestampColor,
 	}
@@ -251,4 +249,30 @@ func (s *Sessions) init() {
 		Set('?', "Toggle cheatsheet", func() {
 			help(s.view)
 		})
+
+	// periodically re-capture pane content and refresh claude status. Runs
+	// off the UI thread; refresh() will reorder by LastAttached so we
+	// preserve the user's selection across re-fills.
+	go func() {
+		t := time.NewTicker(3 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-s.done:
+				return
+			case <-t.C:
+				if a.attached.Load() {
+					continue
+				}
+				selected := s.selected()
+				s.refresh()
+				if selected != nil {
+					s.selectSession(selected)
+				}
+				a.ui.Update(func() {
+					s.render()
+				})
+			}
+		}
+	}()
 }
