@@ -196,6 +196,21 @@ func (s *Sessions) statusAt(i int) core.ClaudeStatus {
 	return s.statuses[i]
 }
 
+// snapshot returns a stable string fingerprint of the visible cell state
+// (ordered name + status pairs). The periodic ticker uses this to avoid
+// re-rendering — and the user-visible flash that comes with it — when
+// nothing the user can perceive has changed.
+func (s *Sessions) snapshot() string {
+	var b strings.Builder
+	for i, c := range s.cells {
+		b.WriteString(c.Name)
+		b.WriteByte(':')
+		fmt.Fprintf(&b, "%d", s.statusAt(i))
+		b.WriteByte('|')
+	}
+	return b.String()
+}
+
 // renderCell returns the cellHeight strings that visually compose one cell.
 func (s *Sessions) renderCell(sess *core.Session, status core.ClaudeStatus, selected bool) []string {
 	border := cellBorderColor
@@ -447,10 +462,13 @@ func (s *Sessions) init() {
 
 	// Periodic status refresh. The ticker reorders cells by created time
 	// so we re-pin the selected session by name each tick — the user's
-	// cursor doesn't drift when statuses or attach times change.
+	// cursor doesn't drift when statuses or attach times change. We also
+	// only schedule a redraw when the visible state actually changes; an
+	// unconditional redraw every 3 s makes the icons flicker.
 	go func() {
 		t := time.NewTicker(3 * time.Second)
 		defer t.Stop()
+		var prev string
 		for {
 			select {
 			case <-s.done:
@@ -464,6 +482,11 @@ func (s *Sessions) init() {
 				if selected != nil {
 					s.selectSession(selected)
 				}
+				cur := s.snapshot()
+				if cur == prev {
+					continue
+				}
+				prev = cur
 				a.ui.Update(func() {
 					s.render()
 				})
