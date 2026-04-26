@@ -22,12 +22,8 @@ type App struct {
 	ui *tui.TUI
 
 	// views
-	header     *Header
-	workspaces *Workspaces
-	topics     *Topics
-	sessions   *Sessions
-	preview    *Preview
-	info       *Info
+	sessions *Sessions
+	preview  *Preview
 
 	// worker for processing tasks in FIFO and debouncing
 	worker *Worker
@@ -197,36 +193,20 @@ func (a *App) init() {
 // Inits the UI, views.
 func (a *App) initUI() {
 	// instantiate views
-	hv := newHeader()
-	tv := newTopicsView()
-	wv := newWorkspcacesView()
 	pv := newPreview()
 	sv := newSessionsView()
-	wiv := newInfo()
-	a.header = hv
-	a.topics = tv
-	a.workspaces = wv
 	a.sessions = sv
 	a.preview = pv
-	a.info = wiv
 
 	// set manager functions that render the views
 	a.ui.SetManager(func(t *tui.TUI) error {
-		hv.render()
-		tv.render()
-		wv.render()
 		sv.render()
-		wiv.render()
 		pv.render()
 		return nil
 	})
 
 	// init the views (configs, actions etc...)
-	hv.init()
-	tv.init()
-	wv.init()
 	sv.init()
-	wiv.init()
 	pv.init(a.ui.SetView(getViewPosition(PreviewView)))
 
 	// set global key bindings
@@ -254,18 +234,14 @@ func (a *App) tempUI() {
 func (a *App) focusView(view *tui.View) {
 	a.ui.FocusView(view)
 
-	// for each "focusable" views
-	for _, v := range []*tui.View{
-		a.topics.view,
-		a.workspaces.view,
-		a.sessions.view,
-	} {
-		if v.Name() == view.Name() {
-			v.FrameColor = onFrameColor
-			v.TitleColor = onTitleColor
+	// only the sessions view is focusable now
+	if a.sessions != nil && a.sessions.view != nil {
+		if a.sessions.view.Name() == view.Name() {
+			a.sessions.view.FrameColor = onFrameColor
+			a.sessions.view.TitleColor = onTitleColor
 		} else {
-			v.FrameColor = offFrameColor
-			v.TitleColor = offTitleColor
+			a.sessions.view.FrameColor = offFrameColor
+			a.sessions.view.TitleColor = offTitleColor
 		}
 	}
 }
@@ -277,154 +253,57 @@ func (a *App) styleView(v *tui.View) {
 	v.FrameRunes = tui.ThinFrame
 }
 
-// Wrapper over refresh function that doesnt select anything.
-func (a *App) refreshAll() {
-	a.refresh(nil, nil, nil)
-}
-
 // Refreshes all the views.
-// Ensures the data refresh of topics view is done before workspaces view but everything else in async.
-// if selectTopic, selectWorkspace are not nil, they will be selected in the views.
-// if selectSession is not nil, current session will be shown in preview/info, otherwise current workspace will be shown.
-func (a *App) refresh(selectTopic *core.Topic, selectWorkspace *core.Workspace, selectSession *core.Session) {
+// If selectSession is not nil, it will be selected in the sessions view.
+func (a *App) refresh(selectSession *core.Session) {
 	a.worker.Queue(func() {
-		// header in async
-		go func() {
-			a.header.refresh()
-			a.ui.Update(func() {
-				a.header.render()
-			})
-		}()
-
 		// sessions in async
 		go func() {
 			a.sessions.refresh()
 			if selectSession != nil {
-				// if selectSession is passed, we select session and refresh preview
 				a.sessions.selectSession(selectSession)
 				a.sessions.refreshPreview()
 			}
 			a.ui.Update(func() {
 				if selectSession != nil {
-					a.sessions.showInfo()
 					a.preview.render()
 				}
 				a.sessions.render()
 			})
 		}()
-
-		// topics and workspaces, not in a seperate goroutine as we are already in the worker
-		a.topics.refresh()
-		if selectTopic != nil {
-			// select topic if passed
-			a.topics.selectTopic(selectTopic)
-		}
-
-		// render topics
-		a.ui.Update(func() {
-			a.topics.render()
-		})
-
-		// refresh workspaces after topics
-		a.workspaces.refresh()
-
-		// select workspace if passed
-		if selectWorkspace != nil {
-			a.workspaces.selectWorkspace(selectWorkspace)
-		}
-
-		if selectSession == nil {
-			// if selectSession was not passed we show the workspace
-			a.workspaces.refreshPreview()
-		}
-
-		// render workspaces
-		a.ui.Update(func() {
-			// if selectSession is nil we show workspace (if it was not nil sessions are shown above)
-			if selectSession == nil {
-				a.workspaces.showInfo()
-				a.preview.render()
-			}
-			a.workspaces.render()
-		})
 	})
 }
 
 // Modified version of refresh designed to run on start up.
-// Key difference being setting loading flags, focus initial views and select last workspace
+// Sets loading flags and focuses the sessions view.
 func (a *App) refreshInit() {
-	hv := a.header
-	tv := a.topics
-	wv := a.workspaces
 	sv := a.sessions
 
 	a.worker.Queue(func() {
-		// header in async
-		go func() {
-			hv.refresh()
-			a.ui.Update(func() {
-				hv.render()
-			})
-		}()
-
 		// sessions in async
-		go func() {
-			a.ui.Update(func() {
-				sv.setLoading(true)
-			})
-			sv.refresh()
-			a.ui.Update(func() {
-				sv.setLoading(false)
-				sv.render()
-			})
-		}()
+		a.ui.Update(func() {
+			sv.setLoading(true)
+		})
+		sv.refresh()
+		a.ui.Update(func() {
+			sv.setLoading(false)
+			sv.render()
+		})
 
-		// topics before worskpaces
-		tv.refresh()
+		// pick a session to focus on
 		selected := a.api.SelectedWorkspace()
+		var selectedSession *core.Session
 		if selected != nil {
-			tv.selectTopic(selected.Topic)
-		}
-		a.ui.Update(func() {
-			tv.render()
-		})
-
-		// workspaces
-		a.ui.Update(func() {
-			wv.setLoading(true)
-		})
-		wv.refresh()
-		a.ui.Update(func() {
-			wv.setLoading(false)
-		})
-
-		selectedSession := a.api.Session(selected)
-		if selected != nil {
+			selectedSession = a.api.Session(selected)
 			if selectedSession != nil {
 				sv.selectSession(selectedSession)
 			}
-
-			wv.selectWorkspace(selected)
 		}
-		wv.refreshPreview()
+
+		sv.refreshPreview()
 		a.ui.Update(func() {
-			// render workspaces
-			wv.render()
-			wv.showInfo()
 			a.preview.render()
-
-			// initial focus
-			if selected != nil {
-				if selectedSession != nil {
-					sv.focus()
-				} else {
-					wv.focus()
-				}
-			} else {
-				tv.focus()
-			}
-
-			// after the initial focus we can set the initialized flag
+			sv.focus()
 			a.initialized.Store(true)
 		})
 	})

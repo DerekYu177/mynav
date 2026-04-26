@@ -48,17 +48,6 @@ func (s *Sessions) setLoading(b bool) {
 	s.loading = b
 }
 
-func (s *Sessions) showInfo() {
-	session := s.selected()
-	if session == nil {
-		a.info.show(nil)
-		return
-	}
-
-	a.info.show(session.Workspace)
-	a.info.showSession(session)
-}
-
 func (s *Sessions) refreshPreview() {
 	session := s.selected()
 	if session == nil {
@@ -75,7 +64,6 @@ func (s *Sessions) focus() {
 }
 
 func (s *Sessions) refreshDown() {
-	s.showInfo()
 	a.worker.Queue(func() {
 		s.refreshPreview()
 		a.ui.Update(func() {
@@ -157,7 +145,7 @@ func (s *Sessions) attach(session *core.Session) {
 		toast(s, toastInfo)
 	}
 
-	a.refresh(nil, nil, session)
+	a.refresh(session)
 }
 
 func (s *Sessions) init() {
@@ -232,25 +220,9 @@ func (s *Sessions) init() {
 					return
 				}
 
-				a.refresh(nil, nil, session)
+				a.refresh(session)
 				toast("Killed session "+session.DisplayName(), toastInfo)
 			}, fmt.Sprintf("Are you sure you want to delete session for %s?", session.DisplayName()))
-		}).
-		Set('w', "Go to workspace", func() {
-			session := s.selected()
-			if session == nil {
-				return
-			}
-
-			if session.Workspace == nil {
-				toast("No associated workspace", toastWarn)
-				return
-			}
-
-			a.topics.selectTopic(session.Workspace.Topic)
-			a.workspaces.refresh()
-			a.workspaces.selectWorkspace(session.Workspace)
-			a.workspaces.focus()
 		}).
 		Set('a', "Create a Sesssion", func() {
 			editor(func(name string) {
@@ -261,12 +233,6 @@ func (s *Sessions) init() {
 				}
 				s.attach(session)
 			}, func() {}, "Session Name", smallEditorSize, "")
-		}).
-		Set('h', "Focus workspaces view", func() {
-			a.workspaces.focus()
-		}).
-		Set(gocui.KeyArrowLeft, "Focus workspaces view", func() {
-			a.workspaces.focus()
 		}).
 		Set('?', "Toggle cheatsheet", func() {
 			help(s.view)
