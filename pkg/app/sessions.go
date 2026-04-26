@@ -373,16 +373,6 @@ func (s *Sessions) init() {
 		Set('l', "Move right", right).
 		Set('j', "Move down", down).
 		Set('k', "Move up", up).
-		Set('g', "Go to first", func() {
-			s.selIdx = 0
-			s.refreshDown()
-		}).
-		Set('G', "Go to last", func() {
-			if len(s.cells) > 0 {
-				s.selIdx = len(s.cells) - 1
-			}
-			s.refreshDown()
-		}).
 		Set(gocui.KeyEnter, "Open session", func() {
 			session := s.selected()
 			if session == nil {
@@ -416,23 +406,6 @@ func (s *Sessions) init() {
 				}
 				s.attach(session)
 			}, func() {}, "Session Name", smallEditorSize, "")
-		}).
-		Set('e', "Enter pane (zoomed)", func() {
-			session := s.selected()
-			if session == nil {
-				return
-			}
-			if core.IsTmuxSession() {
-				toast("A tmux session is already active", toastWarn)
-				return
-			}
-			err := a.runAction(func() error {
-				return a.api.AttachZoomed(session)
-			})
-			if err != nil {
-				toast(err.Error(), toastError)
-			}
-			a.refresh(session)
 		}).
 		Set('n', "Edit session note", func() {
 			session := s.selected()
