@@ -18,10 +18,9 @@ func TestStatusFromEvent(t *testing.T) {
 		{"UserPromptSubmit -> Running", HookEvent{Event: "UserPromptSubmit"}, ClaudeRunning},
 		{"Notification permission_prompt -> NeedsInput", HookEvent{Event: "Notification", NotificationType: "permission_prompt"}, ClaudeNeedsInput},
 		{"Notification idle -> Idle", HookEvent{Event: "Notification", NotificationType: "session_idle"}, ClaudeIdle},
+		{"PostToolUse -> Running", HookEvent{Event: "PostToolUse"}, ClaudeRunning},
 		{"Stop -> Idle", HookEvent{Event: "Stop"}, ClaudeIdle},
-		{"PostToolUse -> Idle", HookEvent{Event: "PostToolUse"}, ClaudeIdle},
 		{"Stop interrupt -> Error", HookEvent{Event: "Stop", IsInterrupt: true}, ClaudeError},
-		{"PostToolUse interrupt -> Error", HookEvent{Event: "PostToolUse", IsInterrupt: true}, ClaudeError},
 		{"SessionEnd -> Dead", HookEvent{Event: "SessionEnd"}, ClaudeDead},
 		{"unknown event -> Idle", HookEvent{Event: "WhateverNew"}, ClaudeIdle},
 	}

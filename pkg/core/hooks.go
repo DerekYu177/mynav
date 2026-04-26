@@ -43,16 +43,22 @@ func QueueDir() string {
 }
 
 // statusFromEvent maps a hook event to a ClaudeStatus.
+//
+// PostToolUse is mapped to Running, not Idle: it fires after every
+// tool call but Claude is still in the loop and almost always about
+// to call another tool or generate text. Treating it as Idle made
+// the status icon flicker Running ↔ Idle on every tool round-trip.
+// Stop is the only authoritative "assistant turn done" signal.
 func statusFromEvent(e HookEvent) ClaudeStatus {
 	switch e.Event {
-	case "SessionStart", "UserPromptSubmit", "PreToolUse":
+	case "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse":
 		return ClaudeRunning
 	case "Notification":
 		if e.NotificationType == "permission_prompt" {
 			return ClaudeNeedsInput
 		}
 		return ClaudeIdle
-	case "Stop", "PostToolUse":
+	case "Stop":
 		if e.IsInterrupt {
 			return ClaudeError
 		}
