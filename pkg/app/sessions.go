@@ -288,27 +288,38 @@ func (s *Sessions) init() {
 	s.view.Title = " Sessions "
 	a.styleView(s.view)
 
+	// Navigation wraps within the current row (h/l) and within the
+	// current column (j/k). A column may not have a cell in every row
+	// (the trailing row can be partial), so vertical wrap snaps to the
+	// last row that actually has the target column.
 	left := func() {
 		if len(s.cells) == 0 || s.cols == 0 {
 			return
 		}
-		if s.selIdx%s.cols == 0 {
-			return
+		row := s.selIdx / s.cols
+		col := s.selIdx % s.cols
+		if col == 0 {
+			end := (row+1)*s.cols - 1
+			if end >= len(s.cells) {
+				end = len(s.cells) - 1
+			}
+			s.selIdx = end
+		} else {
+			s.selIdx--
 		}
-		s.selIdx--
 		s.refreshDown()
 	}
 	right := func() {
 		if len(s.cells) == 0 || s.cols == 0 {
 			return
 		}
-		if s.selIdx == len(s.cells)-1 {
-			return
+		row := s.selIdx / s.cols
+		atRowEnd := (s.selIdx+1)%s.cols == 0 || s.selIdx == len(s.cells)-1
+		if atRowEnd {
+			s.selIdx = row * s.cols
+		} else {
+			s.selIdx++
 		}
-		if (s.selIdx+1)%s.cols == 0 {
-			return
-		}
-		s.selIdx++
 		s.refreshDown()
 	}
 	down := func() {
@@ -317,9 +328,10 @@ func (s *Sessions) init() {
 		}
 		next := s.selIdx + s.cols
 		if next >= len(s.cells) {
-			return
+			s.selIdx = s.selIdx % s.cols
+		} else {
+			s.selIdx = next
 		}
-		s.selIdx = next
 		s.refreshDown()
 	}
 	up := func() {
@@ -328,9 +340,16 @@ func (s *Sessions) init() {
 		}
 		prev := s.selIdx - s.cols
 		if prev < 0 {
-			return
+			col := s.selIdx % s.cols
+			rows := (len(s.cells) + s.cols - 1) / s.cols
+			bottom := (rows-1)*s.cols + col
+			if bottom >= len(s.cells) {
+				bottom -= s.cols
+			}
+			s.selIdx = bottom
+		} else {
+			s.selIdx = prev
 		}
-		s.selIdx = prev
 		s.refreshDown()
 	}
 
