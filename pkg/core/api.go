@@ -310,14 +310,6 @@ func (s *Session) ActivePaneID() string {
 	return id
 }
 
-// ActivePane returns the tmux pane id and the captured content of the
-// active pane in one traversal. Callers that need both (the approval
-// overlay) save one ListWindows + ListPanes round-trip vs. calling
-// ActivePaneID + ActivePaneCapture separately.
-func (s *Session) ActivePane() (id string, content string) {
-	return s.activePane(true)
-}
-
 func (s *Session) activePane(capture bool) (string, string) {
 	if s == nil || s.Session == nil {
 		return "", ""

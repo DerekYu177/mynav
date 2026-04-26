@@ -57,15 +57,6 @@ func (s ClaudeStatus) String() string {
 	return s.Emoji() + " " + s.Label()
 }
 
-// ApprovalMode classifies a "Needs Input" pane into how Claude expects the user to answer.
-type ApprovalMode int
-
-const (
-	ApprovalNone     ApprovalMode = iota // not an approval prompt (text input)
-	ApprovalOneKey                       // numbered options 1/2/3
-	ApprovalSelector                     // arrow-key selector (❯ marker)
-)
-
 // patterns we look for in pane captures.
 var (
 	reEscToInterrupt = regexp.MustCompile(`\(esc to interrupt\)`)
@@ -108,23 +99,6 @@ func DetectClaudeStatus(pane string) ClaudeStatus {
 	}
 
 	return ClaudeDead
-}
-
-// DetectApprovalMode determines how a Needs-Input pane wants its answer delivered.
-//
-// Returns ApprovalOneKey when numbered options are visible, ApprovalSelector
-// when an arrow selector is visible, and ApprovalNone when the pane appears to
-// want text input (e.g., a clarifying question).
-func DetectApprovalMode(pane string) ApprovalMode {
-	tail := tailLines(pane, 60)
-
-	if isApprovalPrompt(tail) {
-		return ApprovalOneKey
-	}
-	if isSelectorPrompt(tail) {
-		return ApprovalSelector
-	}
-	return ApprovalNone
 }
 
 func isApprovalPrompt(s string) bool {
