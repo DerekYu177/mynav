@@ -422,36 +422,43 @@ func (s *Sessions) init() {
 			help(s.view)
 		})
 
-	// Periodic status refresh. The ticker reorders cells by created time
-	// so we re-pin the selected session by name each tick — the user's
-	// cursor doesn't drift when statuses or attach times change. We also
-	// only schedule a redraw when the visible state actually changes; an
-	// unconditional redraw every 3 s makes the icons flicker.
+	// Status refresh. Driven primarily by the hook store's Changed
+	// channel — icons update the moment a hook event lands. The 3 s
+	// ticker is a backstop for things hooks can't see (new tmux
+	// sessions appearing, the pattern-match fallback for non-Claude
+	// panes). Both paths run the same refresh + diff + render block,
+	// and the snapshot diff means a no-op refresh costs zero gocui
+	// work.
 	go func() {
 		t := time.NewTicker(3 * time.Second)
 		defer t.Stop()
 		var prev string
+		refresh := func() {
+			if a.attached.Load() {
+				return
+			}
+			selected := s.selected()
+			s.refresh()
+			if selected != nil {
+				s.selectSession(selected)
+			}
+			cur := s.snapshot()
+			if cur == prev {
+				return
+			}
+			prev = cur
+			a.ui.Update(func() {
+				s.render()
+			})
+		}
 		for {
 			select {
 			case <-s.done:
 				return
 			case <-t.C:
-				if a.attached.Load() {
-					continue
-				}
-				selected := s.selected()
-				s.refresh()
-				if selected != nil {
-					s.selectSession(selected)
-				}
-				cur := s.snapshot()
-				if cur == prev {
-					continue
-				}
-				prev = cur
-				a.ui.Update(func() {
-					s.render()
-				})
+				refresh()
+			case <-a.api.HookChanged():
+				refresh()
 			}
 		}
 	}()

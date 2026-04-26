@@ -69,6 +69,12 @@ func (a *API) runHookDrainer() {
 	}
 }
 
+// HookChanged exposes the hook store's change signal so the UI can
+// re-render the moment new events land instead of polling.
+func (a *API) HookChanged() <-chan struct{} {
+	return a.hookStore.Changed()
+}
+
 // Returns if an update is available
 func (a *API) UpdateAvailable() (bool, string) {
 	return a.updater.UpdateAvailable()

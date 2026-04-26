@@ -140,12 +140,24 @@ func writeHookEvent(dir, event string, stdin io.Reader, now func() time.Time) er
 // HookStore holds the most recent hook event per pane id and resolves
 // it to a ClaudeStatus.
 type HookStore struct {
-	mu     sync.Mutex
-	latest map[string]HookEvent
+	mu      sync.Mutex
+	latest  map[string]HookEvent
+	changed chan struct{}
 }
 
 func NewHookStore() *HookStore {
-	return &HookStore{latest: map[string]HookEvent{}}
+	return &HookStore{
+		latest:  map[string]HookEvent{},
+		changed: make(chan struct{}, 1),
+	}
+}
+
+// Changed returns a channel that emits whenever a Record updates the
+// store. It's buffered with capacity 1: bursts of events between reads
+// collapse into a single signal, so a flurry of hook fires causes one
+// re-render rather than one per event.
+func (s *HookStore) Changed() <-chan struct{} {
+	return s.changed
 }
 
 // Status returns the cached state for a pane id, or false if nothing
@@ -167,16 +179,24 @@ func (s *HookStore) Status(paneID string) (ClaudeStatus, bool) {
 }
 
 // Record applies a single event to the store, keeping only the newest
-// event per pane id.
+// event per pane id. Signals Changed when the store actually moves —
+// duplicate or out-of-order replays don't wake the listener.
 func (s *HookStore) Record(e HookEvent) {
 	if e.PaneID == "" {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	cur, ok := s.latest[e.PaneID]
-	if !ok || e.Timestamp.After(cur.Timestamp) {
+	updated := !ok || e.Timestamp.After(cur.Timestamp)
+	if updated {
 		s.latest[e.PaneID] = e
+	}
+	s.mu.Unlock()
+	if updated {
+		select {
+		case s.changed <- struct{}{}:
+		default:
+		}
 	}
 }
 

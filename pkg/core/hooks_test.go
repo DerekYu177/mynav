@@ -64,6 +64,62 @@ func TestHookStoreRecordKeepsNewest(t *testing.T) {
 	}
 }
 
+func TestHookStoreChangedSignals(t *testing.T) {
+	s := NewHookStore()
+	now := time.Now()
+
+	// First record: Changed should fire.
+	s.Record(HookEvent{PaneID: "%1", Event: "PreToolUse", Timestamp: now})
+	select {
+	case <-s.Changed():
+	default:
+		t.Fatal("expected Changed signal after first Record")
+	}
+
+	// Channel should be drained — no spurious second signal.
+	select {
+	case <-s.Changed():
+		t.Fatal("Changed should be empty after consuming")
+	default:
+	}
+
+	// Stale (older-than-current) event must NOT signal.
+	s.Record(HookEvent{PaneID: "%1", Event: "Stop", Timestamp: now.Add(-time.Second)})
+	select {
+	case <-s.Changed():
+		t.Fatal("stale event should not signal Changed")
+	default:
+	}
+
+	// Newer event signals again.
+	s.Record(HookEvent{PaneID: "%1", Event: "Stop", Timestamp: now.Add(time.Second)})
+	select {
+	case <-s.Changed():
+	default:
+		t.Fatal("expected Changed signal after newer Record")
+	}
+}
+
+func TestHookStoreChangedCoalesces(t *testing.T) {
+	s := NewHookStore()
+	now := time.Now()
+	// Burst of 5 distinct updates with no reader between them — must
+	// collapse to a single pending signal.
+	for i := 0; i < 5; i++ {
+		s.Record(HookEvent{
+			PaneID:    "%1",
+			Event:     "PreToolUse",
+			Timestamp: now.Add(time.Duration(i) * time.Millisecond),
+		})
+	}
+	<-s.Changed() // one drain
+	select {
+	case <-s.Changed():
+		t.Fatal("expected exactly one pending signal after burst")
+	default:
+	}
+}
+
 func TestHookStoreStaleEventDropped(t *testing.T) {
 	s := NewHookStore()
 	s.Record(HookEvent{
