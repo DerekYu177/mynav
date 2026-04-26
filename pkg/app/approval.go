@@ -55,6 +55,7 @@ func openOneKeyOverlay(session *core.Session, target string) {
 			toast(fmt.Sprintf("send-keys failed: %s", err), toastError)
 			return
 		}
+		a.sessions.setOptimisticStatus(session, core.ClaudeRunning)
 		closeAndFocus()
 		toast(fmt.Sprintf("Sent %s to %s", digit, session.DisplayName()), toastInfo)
 	}
@@ -104,6 +105,7 @@ func openSelectorOverlay(session *core.Session, target string) {
 			toast(fmt.Sprintf("send-keys failed: %s", err), toastError)
 			return
 		}
+		a.sessions.setOptimisticStatus(session, core.ClaudeRunning)
 		closeAndFocus()
 		toast(fmt.Sprintf("Confirmed in %s", session.DisplayName()), toastInfo)
 	}

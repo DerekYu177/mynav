@@ -196,6 +196,26 @@ func (s *Sessions) statusAt(i int) core.ClaudeStatus {
 	return s.statuses[i]
 }
 
+// setOptimisticStatus updates the cached status for a session and re-renders
+// immediately, so the cell icon reflects a just-sent action (e.g. answering
+// a Claude approval prompt) without waiting for the next ticker tick. The
+// next refresh — driven by hooks or pattern matching — overwrites this with
+// the authoritative status.
+func (s *Sessions) setOptimisticStatus(session *core.Session, status core.ClaudeStatus) {
+	if session == nil {
+		return
+	}
+	for i, c := range s.cells {
+		if c.Name == session.Name {
+			s.statuses[i] = status
+			a.ui.Update(func() {
+				s.render()
+			})
+			return
+		}
+	}
+}
+
 // snapshot returns a stable string fingerprint of the visible cell state
 // (ordered name + status pairs). The periodic ticker uses this to avoid
 // re-rendering — and the user-visible flash that comes with it — when
