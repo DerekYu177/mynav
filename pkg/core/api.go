@@ -299,40 +299,32 @@ func (a *API) OpenWorkspace(w *Workspace) error {
 // ActivePaneCapture captures the contents of the active pane in the active
 // window of the session. Returns "" if the session is gone or capture fails.
 func (s *Session) ActivePaneCapture() string {
-	if s == nil || s.Session == nil {
-		return ""
-	}
-	windows, err := s.ListWindows()
-	if err != nil {
-		return ""
-	}
-	for _, w := range windows {
-		if !w.Active {
-			continue
-		}
-		panes, err := w.ListPanes()
-		if err != nil {
-			return ""
-		}
-		for _, p := range panes {
-			if p.Active {
-				out, _ := p.Capture()
-				return out
-			}
-		}
-	}
-	return ""
+	_, content := s.activePane(true)
+	return content
 }
 
 // ActivePaneID returns the tmux pane id (e.g. "%17") of the active pane in
 // the active window. Returns "" if it can't be resolved.
 func (s *Session) ActivePaneID() string {
+	id, _ := s.activePane(false)
+	return id
+}
+
+// ActivePane returns the tmux pane id and the captured content of the
+// active pane in one traversal. Callers that need both (the approval
+// overlay) save one ListWindows + ListPanes round-trip vs. calling
+// ActivePaneID + ActivePaneCapture separately.
+func (s *Session) ActivePane() (id string, content string) {
+	return s.activePane(true)
+}
+
+func (s *Session) activePane(capture bool) (string, string) {
 	if s == nil || s.Session == nil {
-		return ""
+		return "", ""
 	}
 	windows, err := s.ListWindows()
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	for _, w := range windows {
 		if !w.Active {
@@ -340,15 +332,20 @@ func (s *Session) ActivePaneID() string {
 		}
 		panes, err := w.ListPanes()
 		if err != nil {
-			return ""
+			return "", ""
 		}
 		for _, p := range panes {
-			if p.Active {
-				return p.Id
+			if !p.Active {
+				continue
 			}
+			if !capture {
+				return p.Id, ""
+			}
+			out, _ := p.Capture()
+			return p.Id, out
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // ClaudeStatus returns the detected Claude state for the session's

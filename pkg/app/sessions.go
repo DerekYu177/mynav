@@ -439,7 +439,10 @@ func (s *Sessions) init() {
 			if session == nil {
 				return
 			}
-			if a.api.ClaudeStatus(session) != core.ClaudeNeedsInput {
+			// Use the cached status — calling api.ClaudeStatus
+			// here adds two tmux round-trips on the main loop
+			// before the overlay can open.
+			if s.statusAt(s.selIdx) != core.ClaudeNeedsInput {
 				toast("Claude is not waiting for input", toastWarn)
 				return
 			}

@@ -19,14 +19,12 @@ func approvalOverlay(session *core.Session) {
 		return
 	}
 
-	pane := session.ActivePaneCapture()
-	mode := core.DetectApprovalMode(pane)
-	target := session.ActivePaneID()
-
+	target, pane := session.ActivePane()
 	if target == "" {
 		toast("Could not resolve active pane id", toastError)
 		return
 	}
+	mode := core.DetectApprovalMode(pane)
 
 	switch mode {
 	case core.ApprovalOneKey:
