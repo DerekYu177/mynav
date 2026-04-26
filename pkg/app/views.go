@@ -24,14 +24,10 @@ const (
 
 // Dialogs.
 const (
-	EditorDialog           = "EditorDialog"
-	ConfirmationDialog     = "ConfirmationDialog"
-	ToastDialog            = "ToastDialogView"
-	HelpDialog             = "HelpDialog"
-	SearchListDialog1View  = "SearchListDialog1"
-	SearchListDialog2View  = "SearchListDialog2"
-	SearchListDialog3View  = "SearchListDialog3"
-	SearchListDialogBgView = "SearchListDialogBg"
+	EditorDialog       = "EditorDialog"
+	ConfirmationDialog = "ConfirmationDialog"
+	ToastDialog        = "ToastDialogView"
+	HelpDialog         = "HelpDialog"
 )
 
 // computeSessionsHeight returns the number of terminal rows the sessions

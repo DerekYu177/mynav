@@ -240,16 +240,19 @@ func (s *Sessions) renderCell(sess *core.Session, status core.ClaudeStatus, sele
 	}
 }
 
+// Each state gets a distinct glyph so the icon is readable at a
+// glance (and accessible to color-blind users) — color reinforces
+// the shape rather than carrying the whole signal.
 func statusIcon(s core.ClaudeStatus) string {
 	switch s {
 	case core.ClaudeRunning:
 		return statusRunningColor.Sprint("●")
 	case core.ClaudeNeedsInput:
-		return statusNeedsInputColor.Sprint("●")
+		return statusNeedsInputColor.Sprint("◆")
 	case core.ClaudeIdle:
 		return statusIdleColor.Sprint("○")
 	case core.ClaudeError:
-		return statusErrorColor.Sprint("●")
+		return statusErrorColor.Sprint("✗")
 	case core.ClaudeDead:
 		fallthrough
 	default:
@@ -373,16 +376,6 @@ func (s *Sessions) init() {
 		Set('l', "Move right", right).
 		Set('j', "Move down", down).
 		Set('k', "Move up", up).
-		Set('g', "Go to first", func() {
-			s.selIdx = 0
-			s.refreshDown()
-		}).
-		Set('G', "Go to last", func() {
-			if len(s.cells) > 0 {
-				s.selIdx = len(s.cells) - 1
-			}
-			s.refreshDown()
-		}).
 		Set(gocui.KeyEnter, "Open session", func() {
 			session := s.selected()
 			if session == nil {
@@ -417,34 +410,6 @@ func (s *Sessions) init() {
 				s.attach(session)
 			}, func() {}, "Session Name", smallEditorSize, "")
 		}).
-		Set('e', "Enter pane (zoomed)", func() {
-			session := s.selected()
-			if session == nil {
-				return
-			}
-			if core.IsTmuxSession() {
-				toast("A tmux session is already active", toastWarn)
-				return
-			}
-			err := a.runAction(func() error {
-				return a.api.AttachZoomed(session)
-			})
-			if err != nil {
-				toast(err.Error(), toastError)
-			}
-			a.refresh(session)
-		}).
-		Set('c', "Approve Claude prompt", func() {
-			session := s.selected()
-			if session == nil {
-				return
-			}
-			if a.api.ClaudeStatus(session) != core.ClaudeNeedsInput {
-				toast("Claude is not waiting for input", toastWarn)
-				return
-			}
-			approvalOverlay(session)
-		}).
 		Set('n', "Edit session note", func() {
 			session := s.selected()
 			if session == nil {
@@ -460,36 +425,43 @@ func (s *Sessions) init() {
 			help(s.view)
 		})
 
-	// Periodic status refresh. The ticker reorders cells by created time
-	// so we re-pin the selected session by name each tick — the user's
-	// cursor doesn't drift when statuses or attach times change. We also
-	// only schedule a redraw when the visible state actually changes; an
-	// unconditional redraw every 3 s makes the icons flicker.
+	// Status refresh. Driven primarily by the hook store's Changed
+	// channel — icons update the moment a hook event lands. The 3 s
+	// ticker is a backstop for things hooks can't see (new tmux
+	// sessions appearing, the pattern-match fallback for non-Claude
+	// panes). Both paths run the same refresh + diff + render block,
+	// and the snapshot diff means a no-op refresh costs zero gocui
+	// work.
 	go func() {
 		t := time.NewTicker(3 * time.Second)
 		defer t.Stop()
 		var prev string
+		refresh := func() {
+			if a.attached.Load() {
+				return
+			}
+			selected := s.selected()
+			s.refresh()
+			if selected != nil {
+				s.selectSession(selected)
+			}
+			cur := s.snapshot()
+			if cur == prev {
+				return
+			}
+			prev = cur
+			a.ui.Update(func() {
+				s.render()
+			})
+		}
 		for {
 			select {
 			case <-s.done:
 				return
 			case <-t.C:
-				if a.attached.Load() {
-					continue
-				}
-				selected := s.selected()
-				s.refresh()
-				if selected != nil {
-					s.selectSession(selected)
-				}
-				cur := s.snapshot()
-				if cur == prev {
-					continue
-				}
-				prev = cur
-				a.ui.Update(func() {
-					s.render()
-				})
+				refresh()
+			case <-a.api.HookChanged():
+				refresh()
 			}
 		}
 	}()

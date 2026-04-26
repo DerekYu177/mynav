@@ -2,19 +2,20 @@ package core
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/GianlucaP106/gotmux/gotmux"
 )
 
 // API exposes all core api functions.
 type API struct {
-	fs      *Filesystem
-	tmux    *gotmux.Tmux
-	local   *LocalConfig
-	global  *GlobalConfig
-	updater *updater
+	fs        *Filesystem
+	tmux      *gotmux.Tmux
+	local     *LocalConfig
+	global    *GlobalConfig
+	updater   *updater
+	hookStore *HookStore
 }
 
 // Inits the Api.
@@ -49,7 +50,29 @@ func NewApi(dir string) (*API, error) {
 	api.local = local
 	api.global = global
 	api.updater = &updater{}
+	api.hookStore = NewHookStore()
+
+	// Drain queued Claude Code hook events on a steady cadence even
+	// when the user is attached to a session and ClaudeStatus isn't
+	// being called — otherwise the queue dir grows unboundedly until
+	// they switch back to the mynav UI.
+	go api.runHookDrainer()
+
 	return api, nil
+}
+
+func (a *API) runHookDrainer() {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for range t.C {
+		_ = a.hookStore.Drain(QueueDir())
+	}
+}
+
+// HookChanged exposes the hook store's change signal so the UI can
+// re-render the moment new events land instead of polling.
+func (a *API) HookChanged() <-chan struct{} {
+	return a.hookStore.Changed()
 }
 
 // Returns if an update is available
@@ -281,40 +304,24 @@ func (a *API) OpenWorkspace(w *Workspace) error {
 // ActivePaneCapture captures the contents of the active pane in the active
 // window of the session. Returns "" if the session is gone or capture fails.
 func (s *Session) ActivePaneCapture() string {
-	if s == nil || s.Session == nil {
-		return ""
-	}
-	windows, err := s.ListWindows()
-	if err != nil {
-		return ""
-	}
-	for _, w := range windows {
-		if !w.Active {
-			continue
-		}
-		panes, err := w.ListPanes()
-		if err != nil {
-			return ""
-		}
-		for _, p := range panes {
-			if p.Active {
-				out, _ := p.Capture()
-				return out
-			}
-		}
-	}
-	return ""
+	_, content := s.activePane(true)
+	return content
 }
 
 // ActivePaneID returns the tmux pane id (e.g. "%17") of the active pane in
 // the active window. Returns "" if it can't be resolved.
 func (s *Session) ActivePaneID() string {
+	id, _ := s.activePane(false)
+	return id
+}
+
+func (s *Session) activePane(capture bool) (string, string) {
 	if s == nil || s.Session == nil {
-		return ""
+		return "", ""
 	}
 	windows, err := s.ListWindows()
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	for _, w := range windows {
 		if !w.Active {
@@ -322,58 +329,39 @@ func (s *Session) ActivePaneID() string {
 		}
 		panes, err := w.ListPanes()
 		if err != nil {
-			return ""
+			return "", ""
 		}
 		for _, p := range panes {
-			if p.Active {
-				return p.Id
+			if !p.Active {
+				continue
 			}
+			if !capture {
+				return p.Id, ""
+			}
+			out, _ := p.Capture()
+			return p.Id, out
 		}
 	}
-	return ""
+	return "", ""
 }
 
-// ClaudeStatus returns the detected Claude state for the session's active pane.
+// ClaudeStatus returns the detected Claude state for the session's
+// active pane. It prefers state recorded by Claude Code's hooks (the
+// authoritative signal — Notification(permission_prompt) for example
+// is unambiguous in a way pattern matching can't be), and falls back
+// to pattern-matching the captured pane content when no hook event is
+// available for the pane.
 func (a *API) ClaudeStatus(s *Session) ClaudeStatus {
 	if s == nil {
 		return ClaudeDead
 	}
+	// Drain eagerly so a hook that fired between the last ticker
+	// drain and this read still counts.
+	_ = a.hookStore.Drain(QueueDir())
+	if status, ok := a.hookStore.Status(s.ActivePaneID()); ok {
+		return status
+	}
 	return DetectClaudeStatus(s.ActivePaneCapture())
-}
-
-// AttachZoomed attaches to the session, ensuring the active pane is zoomed
-// in the active window. Returns an error if attach fails.
-func (a *API) AttachZoomed(s *Session) error {
-	if s == nil {
-		return nil
-	}
-
-	// find active window + pane and zoom it before attaching
-	windows, err := s.ListWindows()
-	if err == nil {
-		for _, w := range windows {
-			if !w.Active {
-				continue
-			}
-			panes, err := w.ListPanes()
-			if err != nil {
-				break
-			}
-			for _, p := range panes {
-				if !p.Active {
-					continue
-				}
-				_ = p.SelectPane(nil)
-				if !w.ZoomedFlag {
-					_ = exec.Command("tmux", "resize-pane", "-t", p.Id, "-Z").Run()
-				}
-				break
-			}
-			break
-		}
-	}
-
-	return s.Attach()
 }
 
 // SessionComment returns the saved comment for a session, keyed by tmux name.

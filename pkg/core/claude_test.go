@@ -59,36 +59,3 @@ func TestDetectClaudeStatus(t *testing.T) {
 		})
 	}
 }
-
-func TestDetectApprovalMode(t *testing.T) {
-	tests := []struct {
-		name string
-		pane string
-		want ApprovalMode
-	}{
-		{
-			name: "numbered list is one-key",
-			pane: "Do you want to make this edit?\n 1. Yes\n 2. Yes, and don't ask again\n 3. No",
-			want: ApprovalOneKey,
-		},
-		{
-			name: "selector arrow is selector",
-			pane: "Pick a model:\n  Sonnet\n❯ Opus\n  Haiku",
-			want: ApprovalSelector,
-		},
-		{
-			name: "neither is none",
-			pane: "What is your name? │ > │",
-			want: ApprovalNone,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := DetectApprovalMode(tt.pane)
-			if got != tt.want {
-				t.Errorf("DetectApprovalMode() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
