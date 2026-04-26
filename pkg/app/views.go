@@ -8,6 +8,15 @@ import (
 const (
 	SessionsView = "SessionsView"
 	PreviewView  = "TmuxPreviewView"
+	DetailsView  = "DetailsView"
+)
+
+// Details overlay sizing — a small floating box anchored to the top-right
+// of the preview area showing the selected session's last-attached time
+// and note. Two inner content lines + frame.
+const (
+	detailsWidth  = 36
+	detailsHeight = 4
 )
 
 // Dialogs.
@@ -65,6 +74,16 @@ func getViewPosition(viewName string) *tui.ViewPosition {
 		0, maxY-sh,
 		maxX-1, maxY-1,
 		0,
+	)
+
+	// details: floating box on the preview's top-right corner. Anchored
+	// inside the preview's frame (offset 1 row from the top, 1 col from
+	// the right) so we don't paint over the preview's own border.
+	positionMap[DetailsView] = tui.NewViewPosition(
+		DetailsView,
+		maxX-detailsWidth-1, 1,
+		maxX-2, detailsHeight,
+		1,
 	)
 
 	return positionMap[viewName]

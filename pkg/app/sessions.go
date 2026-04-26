@@ -103,6 +103,7 @@ func (s *Sessions) focus() {
 }
 
 func (s *Sessions) refreshDown() {
+	a.details.show(s.selected())
 	a.worker.Queue(func() {
 		s.refreshPreview()
 		a.ui.Update(func() {
