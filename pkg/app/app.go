@@ -24,6 +24,7 @@ type App struct {
 	// views
 	sessions *Sessions
 	preview  *Preview
+	comment  *Comment
 
 	// worker for processing tasks in FIFO and debouncing
 	worker *Worker
@@ -195,18 +196,22 @@ func (a *App) initUI() {
 	// instantiate views
 	pv := newPreview()
 	sv := newSessionsView()
+	cv := newComment()
 	a.sessions = sv
 	a.preview = pv
+	a.comment = cv
 
 	// set manager functions that render the views
 	a.ui.SetManager(func(t *tui.TUI) error {
 		sv.render()
+		cv.render()
 		pv.render()
 		return nil
 	})
 
 	// init the views (configs, actions etc...)
 	sv.init()
+	cv.init()
 	pv.init(a.ui.SetView(getViewPosition(PreviewView)))
 
 	// set global key bindings
@@ -263,10 +268,12 @@ func (a *App) refresh(selectSession *core.Session) {
 			if selectSession != nil {
 				a.sessions.selectSession(selectSession)
 				a.sessions.refreshPreview()
+				a.comment.show(selectSession)
 			}
 			a.ui.Update(func() {
 				if selectSession != nil {
 					a.preview.render()
+					a.comment.render()
 				}
 				a.sessions.render()
 			})
@@ -301,8 +308,10 @@ func (a *App) refreshInit() {
 		}
 
 		sv.refreshPreview()
+		a.comment.show(sv.selected())
 		a.ui.Update(func() {
 			a.preview.render()
+			a.comment.render()
 			sv.focus()
 			a.initialized.Store(true)
 		})

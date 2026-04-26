@@ -64,10 +64,12 @@ func (s *Sessions) focus() {
 }
 
 func (s *Sessions) refreshDown() {
+	a.comment.show(s.selected())
 	a.worker.Queue(func() {
 		s.refreshPreview()
 		a.ui.Update(func() {
 			a.preview.render()
+			a.comment.render()
 		})
 	})
 }
@@ -233,6 +235,18 @@ func (s *Sessions) init() {
 				}
 				s.attach(session)
 			}, func() {}, "Session Name", smallEditorSize, "")
+		}).
+		Set('n', "Edit session note", func() {
+			session := s.selected()
+			if session == nil {
+				return
+			}
+			current := a.api.SessionComment(session)
+			editor(func(text string) {
+				a.api.SetSessionComment(session, text)
+				a.comment.show(session)
+				a.comment.render()
+			}, func() {}, "Note", largeEditorSize, current)
 		}).
 		Set('?', "Toggle cheatsheet", func() {
 			help(s.view)

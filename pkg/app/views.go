@@ -7,6 +7,7 @@ import (
 // Views.
 const (
 	SessionsView = "SessionsView"
+	CommentView  = "CommentView"
 	PreviewView  = "TmuxPreviewView"
 )
 
@@ -34,10 +35,18 @@ func getViewPosition(viewName string) *tui.ViewPosition {
 		0,
 	)
 
-	// preview: full right side
+	// comment: top-right slot, ~6 rows tall
+	positionMap[CommentView] = tui.NewViewPosition(
+		CommentView,
+		maxX/3, 0,
+		maxX-1, 6,
+		0,
+	)
+
+	// preview: bottom-right, fills the rest
 	positionMap[PreviewView] = tui.NewViewPosition(
 		PreviewView,
-		maxX/3, 0,
+		maxX/3, 7,
 		maxX-1, maxY-1,
 		0,
 	)

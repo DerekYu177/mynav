@@ -277,6 +277,22 @@ func (a *API) OpenWorkspace(w *Workspace) error {
 	return session.Attach()
 }
 
+// SessionComment returns the saved comment for a session, keyed by tmux name.
+func (a *API) SessionComment(s *Session) string {
+	if s == nil {
+		return ""
+	}
+	return a.local.SessionComment(s.Name)
+}
+
+// SetSessionComment persists a comment for a session, keyed by tmux name.
+func (a *API) SetSessionComment(s *Session, comment string) {
+	if s == nil {
+		return
+	}
+	a.local.SetSessionComment(s.Name, comment)
+}
+
 func (a *API) NewSession(name string) (*Session, error) {
 	s, err := a.tmux.NewSession(&gotmux.SessionOptions{
 		Name: name,
