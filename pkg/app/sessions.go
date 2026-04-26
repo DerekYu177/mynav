@@ -19,6 +19,11 @@ type Sessions struct {
 	// cells, ordered for stable position (oldest → newest by tmux session_created)
 	cells []*core.Session
 
+	// claude status cached in lockstep with cells; populated by refresh().
+	// Computing status shells out to `tmux capture-pane`, so we keep it off
+	// the render path — the 3 s ticker is the only place it runs.
+	statuses []core.ClaudeStatus
+
 	// currently highlighted cell
 	selIdx int
 
@@ -115,6 +120,10 @@ func (s *Sessions) refresh() {
 		return t1.Before(t2)
 	})
 	s.cells = sessions
+	s.statuses = make([]core.ClaudeStatus, len(sessions))
+	for i, sess := range sessions {
+		s.statuses[i] = a.api.ClaudeStatus(sess)
+	}
 	if s.selIdx >= len(s.cells) {
 		s.selIdx = max(0, len(s.cells)-1)
 	}
@@ -158,7 +167,7 @@ func (s *Sessions) render() {
 		// Render every cell in this row of cells, then interleave by line.
 		row := make([][]string, 0, end-start)
 		for i := start; i < end; i++ {
-			row = append(row, s.renderCell(s.cells[i], isFocused && i == s.selIdx))
+			row = append(row, s.renderCell(s.cells[i], s.statusAt(i), isFocused && i == s.selIdx))
 		}
 
 		for line := 0; line < cellHeight; line++ {
@@ -175,8 +184,17 @@ func (s *Sessions) render() {
 	}
 }
 
+// statusAt returns the cached status at index i, defaulting to ClaudeDead
+// when the parallel slice is missing (e.g. between refreshes).
+func (s *Sessions) statusAt(i int) core.ClaudeStatus {
+	if i < 0 || i >= len(s.statuses) {
+		return core.ClaudeDead
+	}
+	return s.statuses[i]
+}
+
 // renderCell returns the cellHeight strings that visually compose one cell.
-func (s *Sessions) renderCell(sess *core.Session, selected bool) []string {
+func (s *Sessions) renderCell(sess *core.Session, status core.ClaudeStatus, selected bool) []string {
 	border := cellBorderColor
 	if selected {
 		border = cellSelectedColor
@@ -186,7 +204,7 @@ func (s *Sessions) renderCell(sess *core.Session, selected bool) []string {
 	// runes. The vertical edges are added afterwards.
 	inner := cellWidth - 2
 
-	icon := statusIcon(a.api.ClaudeStatus(sess))
+	icon := statusIcon(status)
 	name := truncateRunes(sess.DisplayName(), 15)
 	nameStyled := workspaceNameColor.Sprint(padRightRunes(name, 15))
 
@@ -333,10 +351,6 @@ func (s *Sessions) init() {
 		Set('l', "Move right", right).
 		Set('j', "Move down", down).
 		Set('k', "Move up", up).
-		Set(gocui.KeyArrowLeft, "Move left", left).
-		Set(gocui.KeyArrowRight, "Move right", right).
-		Set(gocui.KeyArrowDown, "Move down", down).
-		Set(gocui.KeyArrowUp, "Move up", up).
 		Set('g', "Go to first", func() {
 			s.selIdx = 0
 			s.refreshDown()
