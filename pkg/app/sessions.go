@@ -37,14 +37,16 @@ type Sessions struct {
 	done chan bool
 }
 
-// Cell layout constants. The cell is a 22-wide / 5-tall box with its own
-// border drawn from box-drawing runes; cells are separated by a single
-// blank column. At a typical 180-col terminal that fits 7 cells per row.
+// Cell layout constants. Each cell is a 20-wide / 3-tall box drawn from
+// box-drawing runes — top edge, one content line ("name + status dot"),
+// and bottom edge — separated by a single blank column. The note and
+// last-attached time live in the details overlay, not the cell itself.
 const (
-	cellWidth   = 22
-	cellHeight  = 5
-	cellGutterX = 1
-	cellGutterY = 0
+	cellWidth      = 20
+	cellHeight     = 3
+	cellNameLength = 14
+	cellGutterX    = 1
+	cellGutterY    = 0
 )
 
 var (
@@ -200,29 +202,16 @@ func (s *Sessions) renderCell(sess *core.Session, status core.ClaudeStatus, sele
 		border = cellSelectedColor
 	}
 
-	// Inner content width — every line below must visually occupy this many
-	// runes. The vertical edges are added afterwards.
+	// Inner content width — the single content line must visually occupy
+	// this many runes. The vertical edges are added afterwards.
 	inner := cellWidth - 2
 
 	icon := statusIcon(status)
-	name := truncateRunes(sess.DisplayName(), 15)
-	nameStyled := workspaceNameColor.Sprint(padRightRunes(name, 15))
+	name := truncateRunes(sess.DisplayName(), cellNameLength)
+	nameStyled := workspaceNameColor.Sprint(padRightRunes(name, cellNameLength))
 
-	// "  name(15)  icon  " — 1 + 15 + 2 + 1 + 1 = 20 ✓
-	line1 := " " + nameStyled + "  " + icon + " "
-
-	commentRaw := a.api.SessionComment(sess)
-	commentColor := workspaceNameColor
-	if commentRaw == "" {
-		commentRaw = "(no note)"
-		commentColor = timestampColor
-	}
-	commentText := padRightRunes(truncateRunes(commentRaw, inner-2), inner-2)
-	line2 := " " + commentColor.Sprint(commentText) + " "
-
-	tsRaw := core.TimeAgo(core.UnixTime(sess.LastAttached))
-	tsText := padRightRunes(truncateRunes(tsRaw, inner-2), inner-2)
-	line3 := " " + timestampColor.Sprint(tsText) + " "
+	// " name(14) icon " — 1 + 14 + 1 + 1 + 1 = 18 ✓ (inner)
+	content := " " + nameStyled + " " + icon + " "
 
 	top := border.Sprint("┌" + strings.Repeat("─", inner) + "┐")
 	bot := border.Sprint("└" + strings.Repeat("─", inner) + "┘")
@@ -230,9 +219,7 @@ func (s *Sessions) renderCell(sess *core.Session, status core.ClaudeStatus, sele
 
 	return []string{
 		top,
-		edge + line1 + edge,
-		edge + line2 + edge,
-		edge + line3 + edge,
+		edge + content + edge,
 		bot,
 	}
 }
