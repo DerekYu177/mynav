@@ -359,13 +359,5 @@ func (a *App) initGlobalKeys() {
 		}).
 		Set('>', "Cycle preview right", func() {
 			a.preview.increment()
-		}).
-		Set('s', "Search", func() {
-			// block if not initialized to avoid broken state
-			if !a.initialized.Load() {
-				return
-			}
-
-			newGlobalSearch().init()
 		})
 }

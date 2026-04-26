@@ -27,7 +27,6 @@ MyNav addresses the common challenge of managing multiple development projects i
 - **Instant session switching**: Fast navigation between active development sessions
 
 ### 🛠️ Developer Experience
-- **Fuzzy search**: Intelligent search across workspaces and sessions
 - **tmux integration**: Built on top of tmux for maximum compatibility
 - **Extensive shortcuts**: Comprehensive keyboard navigation and shortcuts
 - **Git awareness**: Integration with Git repositories and status
@@ -126,7 +125,6 @@ If you skip the install step, the pattern-matching fallback continues to drive t
 | `l` / `→` | Focus right panel | Global |
 | `j` / `↓` | Move down | List views |
 | `k` / `↑` | Move up | List views |
-| `Tab` | Toggle focus | Search dialog |
 | `Esc` | Close/cancel | Dialogs |
 
 ### Action Commands
@@ -138,7 +136,6 @@ If you skip the install step, the pattern-matching fallback continues to drive t
 | `D` | Delete item | Topics/Workspaces/Sessions view |
 | `r` | Rename item | Topics/Workspaces view |
 | `X` | Kill session | Workspaces/Sessions view |
-| `s` | Search workspaces | Global |
 | `?` | Toggle help menu | Global |
 | `q` | Quit application | Global |
 | `<` | Cycle preview left | Global |
