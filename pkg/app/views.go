@@ -8,6 +8,18 @@ import (
 const (
 	SessionsView = "SessionsView"
 	PreviewView  = "TmuxPreviewView"
+	DetailsView  = "DetailsView"
+)
+
+// Details overlay sizing — a small floating box anchored to the top-right
+// of the preview area showing the selected session's last-attached time
+// and note. Two inner content lines + frame, plus a 2-col / 1-row gutter
+// from the preview's frame so the overlay reads as its own object.
+const (
+	detailsWidth  = 36
+	detailsHeight = 4
+	detailsMarginX = 2
+	detailsMarginY = 0
 )
 
 // Dialogs.
@@ -22,29 +34,62 @@ const (
 	SearchListDialogBgView = "SearchListDialogBg"
 )
 
-// sessionsHeight is the number of rows reserved for the sessions grid at
-// the bottom of the screen. Two rows of cells plus a row for borders / a
-// little breathing room covers the realistic session count without ever
-// needing to scroll.
-const sessionsHeight = 11
+// computeSessionsHeight returns the number of terminal rows the sessions
+// strip should occupy. The strip is exactly tall enough to hold the cell
+// rows produced by the current session count and the current terminal
+// width — a single-row fallback covers init / empty states where the
+// real cell list isn't populated yet.
+func computeSessionsHeight() int {
+	const oneRow = cellHeight + 2 // 1 row of cells + outer frame
+
+	if a == nil || a.sessions == nil || len(a.sessions.cells) == 0 {
+		return oneRow
+	}
+
+	sx, _ := a.ui.Size()
+	cols := (sx + cellGutterX) / (cellWidth + cellGutterX)
+	if cols < 1 {
+		cols = 1
+	}
+	rows := (len(a.sessions.cells) + cols - 1) / cols
+	if rows < 1 {
+		rows = 1
+	}
+	return rows*cellHeight + (rows-1)*cellGutterY + 2
+}
 
 func getViewPosition(viewName string) *tui.ViewPosition {
 	maxX, maxY := a.ui.Size()
+	sh := computeSessionsHeight()
 	positionMap := map[string]*tui.ViewPosition{}
 
 	// preview: top, fills everything above the sessions grid
 	positionMap[PreviewView] = tui.NewViewPosition(
 		PreviewView,
 		0, 0,
-		maxX-1, maxY-sessionsHeight-1,
+		maxX-1, maxY-sh-1,
 		0,
 	)
 
 	// sessions: bottom strip, full width
 	positionMap[SessionsView] = tui.NewViewPosition(
 		SessionsView,
-		0, maxY-sessionsHeight,
+		0, maxY-sh,
 		maxX-1, maxY-1,
+		0,
+	)
+
+	// details: floating box anchored near the preview's top-right corner
+	// with a small gutter on every side so its corners sit cleanly inside
+	// the preview frame instead of merging with it.
+	dx1 := maxX - 1 - detailsMarginX
+	dx0 := dx1 - detailsWidth + 1
+	dy0 := detailsMarginY + 1
+	dy1 := dy0 + detailsHeight - 1
+	positionMap[DetailsView] = tui.NewViewPosition(
+		DetailsView,
+		dx0, dy0,
+		dx1, dy1,
 		0,
 	)
 

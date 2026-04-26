@@ -24,6 +24,7 @@ type App struct {
 	// views
 	sessions *Sessions
 	preview  *Preview
+	details  *Details
 
 	// worker for processing tasks in FIFO and debouncing
 	worker *Worker
@@ -195,13 +196,17 @@ func (a *App) initUI() {
 	// instantiate views
 	pv := newPreview()
 	sv := newSessionsView()
+	dv := newDetails()
 	a.sessions = sv
 	a.preview = pv
+	a.details = dv
 
-	// set manager functions that render the views
+	// set manager functions that render the views. The details overlay
+	// renders LAST so it sits on top of the preview's top-right corner.
 	a.ui.SetManager(func(t *tui.TUI) error {
 		sv.render()
 		pv.render()
+		dv.render()
 		return nil
 	})
 
@@ -263,6 +268,7 @@ func (a *App) refresh(selectSession *core.Session) {
 			if selectSession != nil {
 				a.sessions.selectSession(selectSession)
 				a.sessions.refreshPreview()
+				a.details.show(selectSession)
 			}
 			a.ui.Update(func() {
 				if selectSession != nil {
@@ -301,6 +307,7 @@ func (a *App) refreshInit() {
 		}
 
 		sv.refreshPreview()
+		a.details.show(sv.selected())
 		a.ui.Update(func() {
 			a.preview.render()
 			sv.focus()

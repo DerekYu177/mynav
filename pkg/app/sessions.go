@@ -19,6 +19,11 @@ type Sessions struct {
 	// cells, ordered for stable position (oldest → newest by tmux session_created)
 	cells []*core.Session
 
+	// claude status cached in lockstep with cells; populated by refresh().
+	// Computing status shells out to `tmux capture-pane`, so we keep it off
+	// the render path — the 3 s ticker is the only place it runs.
+	statuses []core.ClaudeStatus
+
 	// currently highlighted cell
 	selIdx int
 
@@ -32,14 +37,16 @@ type Sessions struct {
 	done chan bool
 }
 
-// Cell layout constants. The cell is a 22-wide / 5-tall box with its own
-// border drawn from box-drawing runes; cells are separated by a single
-// blank column. At a typical 180-col terminal that fits 7 cells per row.
+// Cell layout constants. Each cell is a 20-wide / 3-tall box drawn from
+// box-drawing runes — top edge, one content line ("name + status dot"),
+// and bottom edge — separated by a single blank column. The note and
+// last-attached time live in the details overlay, not the cell itself.
 const (
-	cellWidth   = 22
-	cellHeight  = 5
-	cellGutterX = 1
-	cellGutterY = 0
+	cellWidth      = 20
+	cellHeight     = 3
+	cellNameLength = 14
+	cellGutterX    = 1
+	cellGutterY    = 0
 )
 
 var (
@@ -96,6 +103,7 @@ func (s *Sessions) focus() {
 }
 
 func (s *Sessions) refreshDown() {
+	a.details.show(s.selected())
 	a.worker.Queue(func() {
 		s.refreshPreview()
 		a.ui.Update(func() {
@@ -115,6 +123,10 @@ func (s *Sessions) refresh() {
 		return t1.Before(t2)
 	})
 	s.cells = sessions
+	s.statuses = make([]core.ClaudeStatus, len(sessions))
+	for i, sess := range sessions {
+		s.statuses[i] = a.api.ClaudeStatus(sess)
+	}
 	if s.selIdx >= len(s.cells) {
 		s.selIdx = max(0, len(s.cells)-1)
 	}
@@ -158,7 +170,7 @@ func (s *Sessions) render() {
 		// Render every cell in this row of cells, then interleave by line.
 		row := make([][]string, 0, end-start)
 		for i := start; i < end; i++ {
-			row = append(row, s.renderCell(s.cells[i], isFocused && i == s.selIdx))
+			row = append(row, s.renderCell(s.cells[i], s.statusAt(i), isFocused && i == s.selIdx))
 		}
 
 		for line := 0; line < cellHeight; line++ {
@@ -175,36 +187,47 @@ func (s *Sessions) render() {
 	}
 }
 
+// statusAt returns the cached status at index i, defaulting to ClaudeDead
+// when the parallel slice is missing (e.g. between refreshes).
+func (s *Sessions) statusAt(i int) core.ClaudeStatus {
+	if i < 0 || i >= len(s.statuses) {
+		return core.ClaudeDead
+	}
+	return s.statuses[i]
+}
+
+// snapshot returns a stable string fingerprint of the visible cell state
+// (ordered name + status pairs). The periodic ticker uses this to avoid
+// re-rendering — and the user-visible flash that comes with it — when
+// nothing the user can perceive has changed.
+func (s *Sessions) snapshot() string {
+	var b strings.Builder
+	for i, c := range s.cells {
+		b.WriteString(c.Name)
+		b.WriteByte(':')
+		fmt.Fprintf(&b, "%d", s.statusAt(i))
+		b.WriteByte('|')
+	}
+	return b.String()
+}
+
 // renderCell returns the cellHeight strings that visually compose one cell.
-func (s *Sessions) renderCell(sess *core.Session, selected bool) []string {
+func (s *Sessions) renderCell(sess *core.Session, status core.ClaudeStatus, selected bool) []string {
 	border := cellBorderColor
 	if selected {
 		border = cellSelectedColor
 	}
 
-	// Inner content width — every line below must visually occupy this many
-	// runes. The vertical edges are added afterwards.
+	// Inner content width — the single content line must visually occupy
+	// this many runes. The vertical edges are added afterwards.
 	inner := cellWidth - 2
 
-	icon := statusIcon(a.api.ClaudeStatus(sess))
-	name := truncateRunes(sess.DisplayName(), 15)
-	nameStyled := workspaceNameColor.Sprint(padRightRunes(name, 15))
+	icon := statusIcon(status)
+	name := truncateRunes(sess.DisplayName(), cellNameLength)
+	nameStyled := workspaceNameColor.Sprint(padRightRunes(name, cellNameLength))
 
-	// "  name(15)  icon  " — 1 + 15 + 2 + 1 + 1 = 20 ✓
-	line1 := " " + nameStyled + "  " + icon + " "
-
-	commentRaw := a.api.SessionComment(sess)
-	commentColor := workspaceNameColor
-	if commentRaw == "" {
-		commentRaw = "(no note)"
-		commentColor = timestampColor
-	}
-	commentText := padRightRunes(truncateRunes(commentRaw, inner-2), inner-2)
-	line2 := " " + commentColor.Sprint(commentText) + " "
-
-	tsRaw := core.TimeAgo(core.UnixTime(sess.LastAttached))
-	tsText := padRightRunes(truncateRunes(tsRaw, inner-2), inner-2)
-	line3 := " " + timestampColor.Sprint(tsText) + " "
+	// " name(14) icon " — 1 + 14 + 1 + 1 + 1 = 18 ✓ (inner)
+	content := " " + nameStyled + " " + icon + " "
 
 	top := border.Sprint("┌" + strings.Repeat("─", inner) + "┐")
 	bot := border.Sprint("└" + strings.Repeat("─", inner) + "┘")
@@ -212,9 +235,7 @@ func (s *Sessions) renderCell(sess *core.Session, selected bool) []string {
 
 	return []string{
 		top,
-		edge + line1 + edge,
-		edge + line2 + edge,
-		edge + line3 + edge,
+		edge + content + edge,
 		bot,
 	}
 }
@@ -282,27 +303,38 @@ func (s *Sessions) init() {
 	s.view.Title = " Sessions "
 	a.styleView(s.view)
 
+	// Navigation wraps within the current row (h/l) and within the
+	// current column (j/k). A column may not have a cell in every row
+	// (the trailing row can be partial), so vertical wrap snaps to the
+	// last row that actually has the target column.
 	left := func() {
 		if len(s.cells) == 0 || s.cols == 0 {
 			return
 		}
-		if s.selIdx%s.cols == 0 {
-			return
+		row := s.selIdx / s.cols
+		col := s.selIdx % s.cols
+		if col == 0 {
+			end := (row+1)*s.cols - 1
+			if end >= len(s.cells) {
+				end = len(s.cells) - 1
+			}
+			s.selIdx = end
+		} else {
+			s.selIdx--
 		}
-		s.selIdx--
 		s.refreshDown()
 	}
 	right := func() {
 		if len(s.cells) == 0 || s.cols == 0 {
 			return
 		}
-		if s.selIdx == len(s.cells)-1 {
-			return
+		row := s.selIdx / s.cols
+		atRowEnd := (s.selIdx+1)%s.cols == 0 || s.selIdx == len(s.cells)-1
+		if atRowEnd {
+			s.selIdx = row * s.cols
+		} else {
+			s.selIdx++
 		}
-		if (s.selIdx+1)%s.cols == 0 {
-			return
-		}
-		s.selIdx++
 		s.refreshDown()
 	}
 	down := func() {
@@ -311,9 +343,10 @@ func (s *Sessions) init() {
 		}
 		next := s.selIdx + s.cols
 		if next >= len(s.cells) {
-			return
+			s.selIdx = s.selIdx % s.cols
+		} else {
+			s.selIdx = next
 		}
-		s.selIdx = next
 		s.refreshDown()
 	}
 	up := func() {
@@ -322,9 +355,16 @@ func (s *Sessions) init() {
 		}
 		prev := s.selIdx - s.cols
 		if prev < 0 {
-			return
+			col := s.selIdx % s.cols
+			rows := (len(s.cells) + s.cols - 1) / s.cols
+			bottom := (rows-1)*s.cols + col
+			if bottom >= len(s.cells) {
+				bottom -= s.cols
+			}
+			s.selIdx = bottom
+		} else {
+			s.selIdx = prev
 		}
-		s.selIdx = prev
 		s.refreshDown()
 	}
 
@@ -333,10 +373,6 @@ func (s *Sessions) init() {
 		Set('l', "Move right", right).
 		Set('j', "Move down", down).
 		Set('k', "Move up", up).
-		Set(gocui.KeyArrowLeft, "Move left", left).
-		Set(gocui.KeyArrowRight, "Move right", right).
-		Set(gocui.KeyArrowDown, "Move down", down).
-		Set(gocui.KeyArrowUp, "Move up", up).
 		Set('g', "Go to first", func() {
 			s.selIdx = 0
 			s.refreshDown()
@@ -426,10 +462,13 @@ func (s *Sessions) init() {
 
 	// Periodic status refresh. The ticker reorders cells by created time
 	// so we re-pin the selected session by name each tick — the user's
-	// cursor doesn't drift when statuses or attach times change.
+	// cursor doesn't drift when statuses or attach times change. We also
+	// only schedule a redraw when the visible state actually changes; an
+	// unconditional redraw every 3 s makes the icons flicker.
 	go func() {
 		t := time.NewTicker(3 * time.Second)
 		defer t.Stop()
+		var prev string
 		for {
 			select {
 			case <-s.done:
@@ -443,6 +482,11 @@ func (s *Sessions) init() {
 				if selected != nil {
 					s.selectSession(selected)
 				}
+				cur := s.snapshot()
+				if cur == prev {
+					continue
+				}
+				prev = cur
 				a.ui.Update(func() {
 					s.render()
 				})

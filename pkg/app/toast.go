@@ -33,14 +33,13 @@ func toast(msg string, typ ToastType) *Toast {
 	td := &Toast{}
 	msg = " " + msg + "  "
 	toastSize := len(msg)
-	_, maxY := a.ui.Size()
 	td.view = a.ui.SetView(
 		tui.NewViewPosition(
 			ToastDialog+tcount,
 			2,
-			maxY-4,
+			1,
 			2+toastSize,
-			maxY-2,
+			3,
 			0,
 		))
 
