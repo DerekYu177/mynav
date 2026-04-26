@@ -277,6 +277,69 @@ func (a *API) OpenWorkspace(w *Workspace) error {
 	return session.Attach()
 }
 
+// ActivePaneCapture captures the contents of the active pane in the active
+// window of the session. Returns "" if the session is gone or capture fails.
+func (s *Session) ActivePaneCapture() string {
+	if s == nil || s.Session == nil {
+		return ""
+	}
+	windows, err := s.ListWindows()
+	if err != nil {
+		return ""
+	}
+	for _, w := range windows {
+		if !w.Active {
+			continue
+		}
+		panes, err := w.ListPanes()
+		if err != nil {
+			return ""
+		}
+		for _, p := range panes {
+			if p.Active {
+				out, _ := p.Capture()
+				return out
+			}
+		}
+	}
+	return ""
+}
+
+// ActivePaneID returns the tmux pane id (e.g. "%17") of the active pane in
+// the active window. Returns "" if it can't be resolved.
+func (s *Session) ActivePaneID() string {
+	if s == nil || s.Session == nil {
+		return ""
+	}
+	windows, err := s.ListWindows()
+	if err != nil {
+		return ""
+	}
+	for _, w := range windows {
+		if !w.Active {
+			continue
+		}
+		panes, err := w.ListPanes()
+		if err != nil {
+			return ""
+		}
+		for _, p := range panes {
+			if p.Active {
+				return p.Id
+			}
+		}
+	}
+	return ""
+}
+
+// ClaudeStatus returns the detected Claude state for the session's active pane.
+func (a *API) ClaudeStatus(s *Session) ClaudeStatus {
+	if s == nil {
+		return ClaudeDead
+	}
+	return DetectClaudeStatus(s.ActivePaneCapture())
+}
+
 // SessionComment returns the saved comment for a session, keyed by tmux name.
 func (a *API) SessionComment(s *Session) string {
 	if s == nil {
