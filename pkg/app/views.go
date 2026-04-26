@@ -7,7 +7,6 @@ import (
 // Views.
 const (
 	SessionsView = "SessionsView"
-	CommentView  = "CommentView"
 	PreviewView  = "TmuxPreviewView"
 )
 
@@ -23,30 +22,28 @@ const (
 	SearchListDialogBgView = "SearchListDialogBg"
 )
 
+// sessionsHeight is the number of rows reserved for the sessions grid at
+// the bottom of the screen. Two rows of cells plus a row for borders / a
+// little breathing room covers the realistic session count without ever
+// needing to scroll.
+const sessionsHeight = 11
+
 func getViewPosition(viewName string) *tui.ViewPosition {
 	maxX, maxY := a.ui.Size()
 	positionMap := map[string]*tui.ViewPosition{}
 
-	// sessions: full left column
-	positionMap[SessionsView] = tui.NewViewPosition(
-		SessionsView,
-		0, 0,
-		maxX/3-1, maxY-1,
-		0,
-	)
-
-	// comment: top-right slot, ~6 rows tall
-	positionMap[CommentView] = tui.NewViewPosition(
-		CommentView,
-		maxX/3, 0,
-		maxX-1, 6,
-		0,
-	)
-
-	// preview: bottom-right, fills the rest
+	// preview: top, fills everything above the sessions grid
 	positionMap[PreviewView] = tui.NewViewPosition(
 		PreviewView,
-		maxX/3, 7,
+		0, 0,
+		maxX-1, maxY-sessionsHeight-1,
+		0,
+	)
+
+	// sessions: bottom strip, full width
+	positionMap[SessionsView] = tui.NewViewPosition(
+		SessionsView,
+		0, maxY-sessionsHeight,
 		maxX-1, maxY-1,
 		0,
 	)
