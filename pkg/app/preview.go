@@ -35,6 +35,9 @@ func (p *Preview) init(v *tui.View) {
 	p.done = make(chan bool)
 	p.view = v
 	p.view.Title = " Preview "
+	// anchor the view at the bottom of captured pane content so the most
+	// recent terminal output is visible instead of the top of the buffer.
+	p.view.Autoscroll = true
 	a.styleView(p.view)
 	p.setPreviews(nil)
 	go func() {
