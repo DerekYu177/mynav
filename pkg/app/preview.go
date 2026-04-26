@@ -86,17 +86,25 @@ func (p *Preview) refresh() {
 
 	p.sessionMu.RUnlock()
 
-	// collect all previews (one per pane)
+	// collect all previews (one per pane), tracking the active pane
+	// in the active window so we can snap the preview to it.
 	previews := make([]string, 0)
+	activeIdx := 0
+	idx := 0
 	for _, w := range windows {
 		panes, _ := w.ListPanes()
 		for _, pane := range panes {
+			if w.Active && pane.Active {
+				activeIdx = idx
+			}
 			preview, _ := pane.Capture()
 			previews = append(previews, preview)
+			idx++
 		}
 	}
 
 	p.setPreviews(previews)
+	p.setPreviewIdx(activeIdx)
 }
 
 func (p *Preview) render() {
@@ -133,6 +141,25 @@ func (p *Preview) setPreviews(previews []string) {
 		p.previewIdx = len(previews) - 1
 	}
 	p.previews = previews
+}
+
+// setPreviewIdx snaps the preview index to the given value, clamped to
+// the current preview list. Called by refresh() to follow the active pane.
+func (p *Preview) setPreviewIdx(idx int) {
+	p.previewMu.Lock()
+	defer p.previewMu.Unlock()
+
+	if len(p.previews) == 0 {
+		p.previewIdx = 0
+		return
+	}
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(p.previews) {
+		idx = len(p.previews) - 1
+	}
+	p.previewIdx = idx
 }
 
 func (p *Preview) increment() {
