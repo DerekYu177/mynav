@@ -282,26 +282,61 @@ func (s *Sessions) init() {
 	s.view.Title = " Sessions "
 	a.styleView(s.view)
 
-	next := func() {
-		if len(s.cells) == 0 {
+	left := func() {
+		if len(s.cells) == 0 || s.cols == 0 {
 			return
 		}
-		s.selIdx = (s.selIdx + 1) % len(s.cells)
+		if s.selIdx%s.cols == 0 {
+			return
+		}
+		s.selIdx--
 		s.refreshDown()
 	}
-	prev := func() {
-		if len(s.cells) == 0 {
+	right := func() {
+		if len(s.cells) == 0 || s.cols == 0 {
 			return
 		}
-		s.selIdx = (s.selIdx - 1 + len(s.cells)) % len(s.cells)
+		if s.selIdx == len(s.cells)-1 {
+			return
+		}
+		if (s.selIdx+1)%s.cols == 0 {
+			return
+		}
+		s.selIdx++
+		s.refreshDown()
+	}
+	down := func() {
+		if len(s.cells) == 0 || s.cols == 0 {
+			return
+		}
+		next := s.selIdx + s.cols
+		if next >= len(s.cells) {
+			return
+		}
+		s.selIdx = next
+		s.refreshDown()
+	}
+	up := func() {
+		if len(s.cells) == 0 || s.cols == 0 {
+			return
+		}
+		prev := s.selIdx - s.cols
+		if prev < 0 {
+			return
+		}
+		s.selIdx = prev
 		s.refreshDown()
 	}
 
 	a.ui.KeyBinding(s.view).
-		Set('j', "Next session", next).
-		Set('k', "Previous session", prev).
-		Set(gocui.KeyArrowDown, "Next session", next).
-		Set(gocui.KeyArrowUp, "Previous session", prev).
+		Set('h', "Move left", left).
+		Set('l', "Move right", right).
+		Set('j', "Move down", down).
+		Set('k', "Move up", up).
+		Set(gocui.KeyArrowLeft, "Move left", left).
+		Set(gocui.KeyArrowRight, "Move right", right).
+		Set(gocui.KeyArrowDown, "Move down", down).
+		Set(gocui.KeyArrowUp, "Move up", up).
 		Set('g', "Go to first", func() {
 			s.selIdx = 0
 			s.refreshDown()
