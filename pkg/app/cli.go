@@ -44,8 +44,37 @@ func handleSubcommand(args []string) bool {
 	case "hook":
 		runHookCommand(args[1:])
 		return true
+	case "install-hooks":
+		runInstallHooks()
+		return true
+	case "uninstall-hooks":
+		runUninstallHooks()
+		return true
 	}
 	return false
+}
+
+func runInstallHooks() {
+	bin, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "install-hooks: cannot resolve own path:", err)
+		os.Exit(1)
+	}
+	if err := core.InstallHooks(bin); err != nil {
+		fmt.Fprintln(os.Stderr, "install-hooks:", err)
+		os.Exit(1)
+	}
+	path, _ := core.ClaudeSettingsPath()
+	fmt.Printf("installed mynav hooks into %s\n", path)
+}
+
+func runUninstallHooks() {
+	if err := core.UninstallHooks(); err != nil {
+		fmt.Fprintln(os.Stderr, "uninstall-hooks:", err)
+		os.Exit(1)
+	}
+	path, _ := core.ClaudeSettingsPath()
+	fmt.Printf("removed mynav hooks from %s\n", path)
 }
 
 func (cli *Cli) parseArgs() {
