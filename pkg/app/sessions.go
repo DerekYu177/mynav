@@ -234,6 +234,17 @@ func (s *Sessions) init() {
 				s.attach(session)
 			}, func() {}, "Session Name", smallEditorSize, "")
 		}).
+		Set('c', "Approve Claude prompt", func() {
+			session := s.selected()
+			if session == nil {
+				return
+			}
+			if a.api.ClaudeStatus(session) != core.ClaudeNeedsInput {
+				toast("Claude is not waiting for input", toastWarn)
+				return
+			}
+			approvalOverlay(session)
+		}).
 		Set('n', "Edit session note", func() {
 			session := s.selected()
 			if session == nil {
