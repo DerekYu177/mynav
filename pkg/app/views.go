@@ -13,10 +13,13 @@ const (
 
 // Details overlay sizing — a small floating box anchored to the top-right
 // of the preview area showing the selected session's last-attached time
-// and note. Two inner content lines + frame.
+// and note. Two inner content lines + frame, plus a 2-col / 1-row gutter
+// from the preview's frame so the overlay reads as its own object.
 const (
 	detailsWidth  = 36
 	detailsHeight = 4
+	detailsMarginX = 2
+	detailsMarginY = 1
 )
 
 // Dialogs.
@@ -76,14 +79,18 @@ func getViewPosition(viewName string) *tui.ViewPosition {
 		0,
 	)
 
-	// details: floating box on the preview's top-right corner. Anchored
-	// inside the preview's frame (offset 1 row from the top, 1 col from
-	// the right) so we don't paint over the preview's own border.
+	// details: floating box anchored near the preview's top-right corner
+	// with a small gutter on every side so its corners sit cleanly inside
+	// the preview frame instead of merging with it.
+	dx1 := maxX - 1 - detailsMarginX
+	dx0 := dx1 - detailsWidth + 1
+	dy0 := detailsMarginY + 1
+	dy1 := dy0 + detailsHeight - 1
 	positionMap[DetailsView] = tui.NewViewPosition(
 		DetailsView,
-		maxX-detailsWidth-1, 1,
-		maxX-2, detailsHeight,
-		1,
+		dx0, dy0,
+		dx1, dy1,
+		0,
 	)
 
 	return positionMap[viewName]
