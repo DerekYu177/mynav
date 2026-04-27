@@ -15,7 +15,6 @@ type API struct {
 	local      *LocalConfig
 	global     *GlobalConfig
 	updater    *updater
-	hookStore  *HookStore
 	reconciler *Reconciler
 }
 
@@ -51,14 +50,7 @@ func NewApi(dir string) (*API, error) {
 	api.local = local
 	api.global = global
 	api.updater = &updater{}
-	api.hookStore = NewHookStore()
 	api.reconciler = NewReconciler(tmux, local.WorktreeRoot())
-
-	// Drain queued Claude Code hook events on a steady cadence even
-	// when the user is attached to a session and ClaudeStatus isn't
-	// being called — otherwise the queue dir grows unboundedly until
-	// they switch back to the mynav UI.
-	go api.runHookDrainer()
 
 	// Reconcile worktree → session mapping when the feature is opted
 	// into. The reconciler only ever creates sessions; pending state
@@ -66,14 +58,6 @@ func NewApi(dir string) (*API, error) {
 	go api.runReconciler()
 
 	return api, nil
-}
-
-func (a *API) runHookDrainer() {
-	t := time.NewTicker(time.Second)
-	defer t.Stop()
-	for range t.C {
-		_ = a.hookStore.Drain(QueueDir())
-	}
 }
 
 func (a *API) runReconciler() {
@@ -110,12 +94,6 @@ func (a *API) PendingSessions() map[string]bool {
 		}
 	}
 	return out
-}
-
-// HookChanged exposes the hook store's change signal so the UI can
-// re-render the moment new events land instead of polling.
-func (a *API) HookChanged() <-chan struct{} {
-	return a.hookStore.Changed()
 }
 
 // Returns if an update is available
@@ -389,20 +367,10 @@ func (s *Session) activePane(capture bool) (string, string) {
 }
 
 // ClaudeStatus returns the detected Claude state for the session's
-// active pane. It prefers state recorded by Claude Code's hooks (the
-// authoritative signal — Notification(permission_prompt) for example
-// is unambiguous in a way pattern matching can't be), and falls back
-// to pattern-matching the captured pane content when no hook event is
-// available for the pane.
+// active pane by pattern-matching the captured pane content.
 func (a *API) ClaudeStatus(s *Session) ClaudeStatus {
 	if s == nil {
 		return ClaudeDead
-	}
-	// Drain eagerly so a hook that fired between the last ticker
-	// drain and this read still counts.
-	_ = a.hookStore.Drain(QueueDir())
-	if status, ok := a.hookStore.Status(s.ActivePaneID()); ok {
-		return status
 	}
 	return DetectClaudeStatus(s.ActivePaneCapture())
 }

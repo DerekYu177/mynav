@@ -452,13 +452,8 @@ func (s *Sessions) init() {
 			help(s.view)
 		})
 
-	// Status refresh. Driven primarily by the hook store's Changed
-	// channel — icons update the moment a hook event lands. The 3 s
-	// ticker is a backstop for things hooks can't see (new tmux
-	// sessions appearing, the pattern-match fallback for non-Claude
-	// panes). Both paths run the same refresh + diff + render block,
-	// and the snapshot diff means a no-op refresh costs zero gocui
-	// work.
+	// Status refresh on a 3 s ticker. The snapshot diff means a
+	// no-op refresh costs zero gocui work.
 	go func() {
 		t := time.NewTicker(3 * time.Second)
 		defer t.Stop()
@@ -486,8 +481,6 @@ func (s *Sessions) init() {
 			case <-s.done:
 				return
 			case <-t.C:
-				refresh()
-			case <-a.api.HookChanged():
 				refresh()
 			}
 		}
