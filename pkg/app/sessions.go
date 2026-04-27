@@ -19,11 +19,6 @@ type Sessions struct {
 	// cells, ordered for stable position (oldest → newest by tmux session_created)
 	cells []*core.Session
 
-	// claude status cached in lockstep with cells; populated by refresh().
-	// Computing status shells out to `tmux capture-pane`, so we keep it off
-	// the render path — the 3 s ticker is the only place it runs.
-	statuses []core.ClaudeStatus
-
 	// pending[i] is true when cells[i] is a worktree-backed session
 	// whose backing worktree no longer exists. Rendered dimmed.
 	pending []bool
@@ -37,18 +32,18 @@ type Sessions struct {
 	// loading flag (only touched on the mainloop)
 	loading bool
 
-	// to kill the status-refresh routine
+	// to kill the refresh routine
 	done chan bool
 }
 
 // Cell layout constants. Each cell is a 20-wide / 3-tall box drawn from
-// box-drawing runes — top edge, one content line ("name + status dot"),
+// box-drawing runes — top edge, one content line (the session name),
 // and bottom edge — separated by a single blank column. The note and
 // last-attached time live in the details overlay, not the cell itself.
 const (
 	cellWidth      = 20
 	cellHeight     = 3
-	cellNameLength = 14
+	cellNameLength = 16
 	cellGutterX    = 1
 	cellGutterY    = 0
 )
@@ -57,11 +52,9 @@ var (
 	cellBorderColor   = color.New(color.FgDarkGray)
 	cellSelectedColor = color.New(color.FgGreen, color.Bold)
 
-	statusRunningColor    = color.New(color.FgGreen, color.Bold)
-	statusNeedsInputColor = color.New(color.FgYellow, color.Bold)
-	statusIdleColor       = color.New(color.FgWhite)
-	statusErrorColor      = color.New(color.FgRed, color.Bold)
-	statusDeadColor       = color.New(color.FgDarkGray)
+	// dimColor is used to dim the names of pending (worktree-removed)
+	// sessions so they're visually distinct from active ones.
+	dimColor = color.New(color.FgDarkGray)
 )
 
 func newSessionsView() *Sessions {
@@ -127,11 +120,9 @@ func (s *Sessions) refresh() {
 		return t1.Before(t2)
 	})
 	s.cells = sessions
-	s.statuses = make([]core.ClaudeStatus, len(sessions))
 	s.pending = make([]bool, len(sessions))
 	pendingByName := a.api.PendingSessions()
 	for i, sess := range sessions {
-		s.statuses[i] = a.api.ClaudeStatus(sess)
 		s.pending[i] = pendingByName[sess.Name]
 	}
 	if s.selIdx >= len(s.cells) {
@@ -177,7 +168,7 @@ func (s *Sessions) render() {
 		// Render every cell in this row of cells, then interleave by line.
 		row := make([][]string, 0, end-start)
 		for i := start; i < end; i++ {
-			row = append(row, s.renderCell(s.cells[i], s.statusAt(i), s.pendingAt(i), isFocused && i == s.selIdx))
+			row = append(row, s.renderCell(s.cells[i], s.pendingAt(i), isFocused && i == s.selIdx))
 		}
 
 		for line := 0; line < cellHeight; line++ {
@@ -194,15 +185,6 @@ func (s *Sessions) render() {
 	}
 }
 
-// statusAt returns the cached status at index i, defaulting to ClaudeDead
-// when the parallel slice is missing (e.g. between refreshes).
-func (s *Sessions) statusAt(i int) core.ClaudeStatus {
-	if i < 0 || i >= len(s.statuses) {
-		return core.ClaudeDead
-	}
-	return s.statuses[i]
-}
-
 // pendingAt reports whether cells[i] is a worktree-backed session
 // whose backing worktree has been removed.
 func (s *Sessions) pendingAt(i int) bool {
@@ -213,15 +195,13 @@ func (s *Sessions) pendingAt(i int) bool {
 }
 
 // snapshot returns a stable string fingerprint of the visible cell state
-// (ordered name + status pairs). The periodic ticker uses this to avoid
+// (ordered name + pending pairs). The periodic ticker uses this to avoid
 // re-rendering — and the user-visible flash that comes with it — when
 // nothing the user can perceive has changed.
 func (s *Sessions) snapshot() string {
 	var b strings.Builder
 	for i, c := range s.cells {
 		b.WriteString(c.Name)
-		b.WriteByte(':')
-		fmt.Fprintf(&b, "%d", s.statusAt(i))
 		if s.pendingAt(i) {
 			b.WriteByte('p')
 		}
@@ -231,7 +211,7 @@ func (s *Sessions) snapshot() string {
 }
 
 // renderCell returns the cellHeight strings that visually compose one cell.
-func (s *Sessions) renderCell(sess *core.Session, status core.ClaudeStatus, pending, selected bool) []string {
+func (s *Sessions) renderCell(sess *core.Session, pending, selected bool) []string {
 	border := cellBorderColor
 	if selected {
 		border = cellSelectedColor
@@ -241,20 +221,17 @@ func (s *Sessions) renderCell(sess *core.Session, status core.ClaudeStatus, pend
 	// this many runes. The vertical edges are added afterwards.
 	inner := cellWidth - 2
 
-	icon := statusIcon(status)
 	name := truncateRunes(sess.DisplayName(), cellNameLength)
 	// Pending = worktree gone but session still alive. Dim the name
-	// so it's visually distinct from active cells; keep the status
-	// icon's own color so users can still see Claude state at a
-	// glance (useful when deciding whether to attach before killing).
+	// so it's visually distinct from active cells.
 	nameColor := workspaceNameColor
 	if pending {
-		nameColor = statusDeadColor
+		nameColor = dimColor
 	}
 	nameStyled := nameColor.Sprint(padRightRunes(name, cellNameLength))
 
-	// " name(14) icon " — 1 + 14 + 1 + 1 + 1 = 18 ✓ (inner)
-	content := " " + nameStyled + " " + icon + " "
+	// " name(16) " — 1 + 16 + 1 = 18 ✓ (inner)
+	content := " " + nameStyled + " "
 
 	top := border.Sprint("┌" + strings.Repeat("─", inner) + "┐")
 	bot := border.Sprint("└" + strings.Repeat("─", inner) + "┘")
@@ -264,26 +241,6 @@ func (s *Sessions) renderCell(sess *core.Session, status core.ClaudeStatus, pend
 		top,
 		edge + content + edge,
 		bot,
-	}
-}
-
-// Each state gets a distinct glyph so the icon is readable at a
-// glance (and accessible to color-blind users) — color reinforces
-// the shape rather than carrying the whole signal.
-func statusIcon(s core.ClaudeStatus) string {
-	switch s {
-	case core.ClaudeRunning:
-		return statusRunningColor.Sprint("●")
-	case core.ClaudeNeedsInput:
-		return statusNeedsInputColor.Sprint("◆")
-	case core.ClaudeIdle:
-		return statusIdleColor.Sprint("○")
-	case core.ClaudeError:
-		return statusErrorColor.Sprint("✗")
-	case core.ClaudeDead:
-		fallthrough
-	default:
-		return statusDeadColor.Sprint("·")
 	}
 }
 
@@ -452,8 +409,9 @@ func (s *Sessions) init() {
 			help(s.view)
 		})
 
-	// Status refresh on a 3 s ticker. The snapshot diff means a
-	// no-op refresh costs zero gocui work.
+	// Cell refresh on a 3 s ticker — picks up new sessions and
+	// pending-worktree changes. The snapshot diff means a no-op
+	// refresh costs zero gocui work.
 	go func() {
 		t := time.NewTicker(3 * time.Second)
 		defer t.Stop()
