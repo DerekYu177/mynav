@@ -95,26 +95,6 @@ MyNav seamlessly integrates with **tmux** to provide robust session management. 
 - **Session detachment**: Press `Leader + D` to detach and return to MyNav
 - **State synchronization**: MyNav stays in sync with your development workflow
 
-## Claude Code Integration
-
-MyNav can read [Claude Code](https://claude.com/claude-code) state directly from Claude's hook system, replacing the default pane-content pattern matcher with authoritative event data. With hooks installed, the status icon next to each session is driven by `Notification(permission_prompt)`, `PreToolUse`, `Stop`, and similar events rather than by scraping the rendered terminal — so a session waiting on an approval is identified unambiguously, even when its pane is showing a numbered list as ordinary content.
-
-Install the hooks once:
-
-```bash
-mynav install-hooks
-```
-
-This merges five entries — `PreToolUse`, `Notification`, `Stop`, `SessionStart`, `SessionEnd` — into `~/.claude/settings.json` alongside any hooks already configured by you or other tools. Re-running it is a no-op.
-
-Remove them later with:
-
-```bash
-mynav uninstall-hooks
-```
-
-If you skip the install step, the pattern-matching fallback continues to drive the status indicator with no further setup required.
-
 ## Keyboard Shortcuts
 
 ### Navigation Controls
