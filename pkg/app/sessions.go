@@ -24,6 +24,10 @@ type Sessions struct {
 	// the render path — the 3 s ticker is the only place it runs.
 	statuses []core.ClaudeStatus
 
+	// pending[i] is true when cells[i] is a worktree-backed session
+	// whose backing worktree no longer exists. Rendered dimmed.
+	pending []bool
+
 	// currently highlighted cell
 	selIdx int
 
@@ -124,8 +128,11 @@ func (s *Sessions) refresh() {
 	})
 	s.cells = sessions
 	s.statuses = make([]core.ClaudeStatus, len(sessions))
+	s.pending = make([]bool, len(sessions))
+	pendingByName := a.api.PendingSessions()
 	for i, sess := range sessions {
 		s.statuses[i] = a.api.ClaudeStatus(sess)
+		s.pending[i] = pendingByName[sess.Name]
 	}
 	if s.selIdx >= len(s.cells) {
 		s.selIdx = max(0, len(s.cells)-1)
@@ -170,7 +177,7 @@ func (s *Sessions) render() {
 		// Render every cell in this row of cells, then interleave by line.
 		row := make([][]string, 0, end-start)
 		for i := start; i < end; i++ {
-			row = append(row, s.renderCell(s.cells[i], s.statusAt(i), isFocused && i == s.selIdx))
+			row = append(row, s.renderCell(s.cells[i], s.statusAt(i), s.pendingAt(i), isFocused && i == s.selIdx))
 		}
 
 		for line := 0; line < cellHeight; line++ {
@@ -196,6 +203,15 @@ func (s *Sessions) statusAt(i int) core.ClaudeStatus {
 	return s.statuses[i]
 }
 
+// pendingAt reports whether cells[i] is a worktree-backed session
+// whose backing worktree has been removed.
+func (s *Sessions) pendingAt(i int) bool {
+	if i < 0 || i >= len(s.pending) {
+		return false
+	}
+	return s.pending[i]
+}
+
 // snapshot returns a stable string fingerprint of the visible cell state
 // (ordered name + status pairs). The periodic ticker uses this to avoid
 // re-rendering — and the user-visible flash that comes with it — when
@@ -206,13 +222,16 @@ func (s *Sessions) snapshot() string {
 		b.WriteString(c.Name)
 		b.WriteByte(':')
 		fmt.Fprintf(&b, "%d", s.statusAt(i))
+		if s.pendingAt(i) {
+			b.WriteByte('p')
+		}
 		b.WriteByte('|')
 	}
 	return b.String()
 }
 
 // renderCell returns the cellHeight strings that visually compose one cell.
-func (s *Sessions) renderCell(sess *core.Session, status core.ClaudeStatus, selected bool) []string {
+func (s *Sessions) renderCell(sess *core.Session, status core.ClaudeStatus, pending, selected bool) []string {
 	border := cellBorderColor
 	if selected {
 		border = cellSelectedColor
@@ -224,7 +243,15 @@ func (s *Sessions) renderCell(sess *core.Session, status core.ClaudeStatus, sele
 
 	icon := statusIcon(status)
 	name := truncateRunes(sess.DisplayName(), cellNameLength)
-	nameStyled := workspaceNameColor.Sprint(padRightRunes(name, cellNameLength))
+	// Pending = worktree gone but session still alive. Dim the name
+	// so it's visually distinct from active cells; keep the status
+	// icon's own color so users can still see Claude state at a
+	// glance (useful when deciding whether to attach before killing).
+	nameColor := workspaceNameColor
+	if pending {
+		nameColor = statusDeadColor
+	}
+	nameStyled := nameColor.Sprint(padRightRunes(name, cellNameLength))
 
 	// " name(14) icon " — 1 + 14 + 1 + 1 + 1 = 18 ✓ (inner)
 	content := " " + nameStyled + " " + icon + " "
