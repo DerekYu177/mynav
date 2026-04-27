@@ -12,6 +12,12 @@ import (
 type LocalConfigData struct {
 	SelectedWorkspace string            `json:"selected-workspace"`
 	SessionComments   map[string]string `json:"session-comments,omitempty"`
+	// WorktreeRoot, when set, opts the user into worktree → session
+	// auto-sync: any directory directly under this path that is itself
+	// a git worktree gets a tmux session created for it. Sessions whose
+	// backing worktree disappears render as pending in the grid; mynav
+	// never kills sessions on its own.
+	WorktreeRoot string `json:"worktree-root,omitempty"`
 }
 
 // LocalConfig is the LocalConfig configuration.
@@ -144,6 +150,12 @@ func (g *LocalConfig) SetSessionComment(name, comment string) {
 
 func (l *LocalConfig) ConfigData() *LocalConfigData {
 	return l.datasource.Get()
+}
+
+// WorktreeRoot returns the configured worktree root (absolute path),
+// or "" if the user has not opted in.
+func (l *LocalConfig) WorktreeRoot() string {
+	return l.datasource.Get().WorktreeRoot
 }
 
 func isBeforeOneHourAgo(timestamp time.Time) bool {
