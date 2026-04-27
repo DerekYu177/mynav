@@ -10,12 +10,13 @@ import (
 
 // API exposes all core api functions.
 type API struct {
-	fs        *Filesystem
-	tmux      *gotmux.Tmux
-	local     *LocalConfig
-	global    *GlobalConfig
-	updater   *updater
-	hookStore *HookStore
+	fs         *Filesystem
+	tmux       *gotmux.Tmux
+	local      *LocalConfig
+	global     *GlobalConfig
+	updater    *updater
+	hookStore  *HookStore
+	reconciler *Reconciler
 }
 
 // Inits the Api.
@@ -51,12 +52,18 @@ func NewApi(dir string) (*API, error) {
 	api.global = global
 	api.updater = &updater{}
 	api.hookStore = NewHookStore()
+	api.reconciler = NewReconciler(tmux, local.WorktreeRoot())
 
 	// Drain queued Claude Code hook events on a steady cadence even
 	// when the user is attached to a session and ClaudeStatus isn't
 	// being called — otherwise the queue dir grows unboundedly until
 	// they switch back to the mynav UI.
 	go api.runHookDrainer()
+
+	// Reconcile worktree → session mapping when the feature is opted
+	// into. The reconciler only ever creates sessions; pending state
+	// is derived per-render and never triggers a kill.
+	go api.runReconciler()
 
 	return api, nil
 }
@@ -67,6 +74,42 @@ func (a *API) runHookDrainer() {
 	for range t.C {
 		_ = a.hookStore.Drain(QueueDir())
 	}
+}
+
+func (a *API) runReconciler() {
+	if a.reconciler == nil || a.reconciler.Root() == "" {
+		return
+	}
+	// One eager pass at startup so worktrees that exist before mynav
+	// opens get sessions immediately, not after the first 2-s tick.
+	_ = a.reconciler.Tick()
+
+	t := time.NewTicker(2 * time.Second)
+	defer t.Stop()
+	for range t.C {
+		_ = a.reconciler.Tick()
+	}
+}
+
+// PendingSessions returns the set of managed session names whose
+// backing worktree has been removed. Sessions named in the result
+// should render dimmed; mynav never kills them. Returns nil when the
+// feature is disabled, which the renderer treats as "no pending."
+func (a *API) PendingSessions() map[string]bool {
+	if a.reconciler == nil || a.reconciler.Root() == "" {
+		return nil
+	}
+	sessions, err := a.reconciler.ManagedSessions()
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]bool, len(sessions))
+	for _, s := range sessions {
+		if s.IsPending() {
+			out[s.Name] = true
+		}
+	}
+	return out
 }
 
 // HookChanged exposes the hook store's change signal so the UI can
