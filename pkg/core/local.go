@@ -18,6 +18,13 @@ type LocalConfigData struct {
 	// backing worktree disappears render as pending in the grid; mynav
 	// never kills sessions on its own.
 	WorktreeRoot string `json:"worktree-root,omitempty"`
+	// SessionOrder is a user-curated ordering of tmux session names,
+	// produced by the move-mode UI in the Sessions view. Sessions in
+	// this list sort first, in their listed order; sessions absent
+	// from it fall through to the created-time fallback. Stale names
+	// (sessions that have been killed) are tolerated and replaced
+	// whole on the next move-mode commit.
+	SessionOrder []string `json:"session-order,omitempty"`
 }
 
 // LocalConfig is the LocalConfig configuration.
@@ -156,6 +163,21 @@ func (l *LocalConfig) ConfigData() *LocalConfigData {
 // or "" if the user has not opted in.
 func (l *LocalConfig) WorktreeRoot() string {
 	return l.datasource.Get().WorktreeRoot
+}
+
+// SessionOrder returns the user-curated session ordering (tmux names).
+// Returns nil when the user has never reordered.
+func (l *LocalConfig) SessionOrder() []string {
+	return l.datasource.Get().SessionOrder
+}
+
+// SetSessionOrder persists the user-curated session ordering. Caller
+// supplies the full list of currently visible tmux names in the order
+// the user wants — stale entries are simply overwritten.
+func (l *LocalConfig) SetSessionOrder(order []string) {
+	data := l.datasource.Get()
+	data.SessionOrder = order
+	l.datasource.Save(data)
 }
 
 func isBeforeOneHourAgo(timestamp time.Time) bool {

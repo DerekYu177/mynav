@@ -16,7 +16,8 @@ import (
 type Sessions struct {
 	view *tui.View
 
-	// cells, ordered for stable position (oldest → newest by tmux session_created)
+	// cells, ordered first by SessionOrder from local config, then by
+	// tmux session_created for sessions absent from that list.
 	cells []*core.Session
 
 	// pending[i] is true when cells[i] is a worktree-backed session
@@ -34,6 +35,16 @@ type Sessions struct {
 
 	// to kill the refresh routine
 	done chan bool
+
+	// move-mode state. While moveActive, hjkl repositions the cell at
+	// selIdx in the linear order rather than moving the cursor; the
+	// auto-refresh ticker is gated to avoid clobbering in-progress
+	// moves; Enter commits the new order to local config and Esc reverts
+	// to moveOrig{Cells,Pending,SelIdx}.
+	moveActive     bool
+	moveOrigCells  []*core.Session
+	moveOrigPend   []bool
+	moveOrigSelIdx int
 }
 
 // Cell layout constants. Each cell is a 20-wide / 3-tall box drawn from
@@ -51,6 +62,10 @@ const (
 var (
 	cellBorderColor   = color.New(color.FgDarkGray)
 	cellSelectedColor = color.New(color.FgGreen, color.Bold)
+	// cellMoveColor is the border color of the cell currently being
+	// moved in move mode. Paired with double-line box characters so the
+	// "this is the one I'm dragging" cue lands without any animation.
+	cellMoveColor = color.New(color.FgYellow, color.Bold)
 
 	// dimColor is used to dim the names of pending (worktree-removed)
 	// sessions so they're visually distinct from active ones.
@@ -111,13 +126,24 @@ func (s *Sessions) refreshDown() {
 
 func (s *Sessions) refresh() {
 	sessions := a.api.AllSessions()
-	// Sort by created time (oldest first) so cells keep stable positions
-	// across refreshes — new sessions appear at the end without shuffling
-	// the existing layout.
-	sort.Slice(sessions, func(i, j int) bool {
-		t1 := core.UnixTime(sessions[i].Created)
-		t2 := core.UnixTime(sessions[j].Created)
-		return t1.Before(t2)
+	// Sessions in the user-curated SessionOrder sort first, in their
+	// listed order. Sessions absent from the list fall back to tmux
+	// session_created (oldest first) so newly created sessions land at
+	// the end without disturbing the curated head.
+	rank := map[string]int{}
+	for i, name := range a.api.SessionOrder() {
+		rank[name] = i
+	}
+	sort.SliceStable(sessions, func(i, j int) bool {
+		ri, oki := rank[sessions[i].Name]
+		rj, okj := rank[sessions[j].Name]
+		if oki && okj {
+			return ri < rj
+		}
+		if oki != okj {
+			return oki
+		}
+		return core.UnixTime(sessions[i].Created).Before(core.UnixTime(sessions[j].Created))
 	})
 	s.cells = sessions
 	s.pending = make([]bool, len(sessions))
@@ -133,6 +159,80 @@ func (s *Sessions) refresh() {
 	}
 }
 
+// moveCell repositions the cell currently at s.selIdx by `delta`
+// positions in the linear order, clamped to [0, len-1]. The pending
+// slice moves in lockstep so visual state stays consistent. selIdx
+// follows the moved cell so subsequent presses keep nudging it.
+func (s *Sessions) moveCell(delta int) {
+	if !s.moveActive || len(s.cells) <= 1 {
+		return
+	}
+	target := s.selIdx + delta
+	if target < 0 {
+		target = 0
+	}
+	if target > len(s.cells)-1 {
+		target = len(s.cells) - 1
+	}
+	if target == s.selIdx {
+		return
+	}
+	moving := s.cells[s.selIdx]
+	movingPending := s.pending[s.selIdx]
+	s.cells = append(s.cells[:s.selIdx], s.cells[s.selIdx+1:]...)
+	s.pending = append(s.pending[:s.selIdx], s.pending[s.selIdx+1:]...)
+	s.cells = append(s.cells[:target], append([]*core.Session{moving}, s.cells[target:]...)...)
+	s.pending = append(s.pending[:target], append([]bool{movingPending}, s.pending[target:]...)...)
+	s.selIdx = target
+	s.render()
+}
+
+// enterMoveMode snapshots the current order so cancelMove can restore
+// it, then flips the moveActive flag. Subsequent hjkl will reposition
+// rather than navigate.
+func (s *Sessions) enterMoveMode() {
+	if s.moveActive || len(s.cells) == 0 {
+		return
+	}
+	s.moveOrigCells = append([]*core.Session(nil), s.cells...)
+	s.moveOrigPend = append([]bool(nil), s.pending...)
+	s.moveOrigSelIdx = s.selIdx
+	s.moveActive = true
+	s.render()
+}
+
+// commitMove persists the current cell order to local config and
+// exits move mode.
+func (s *Sessions) commitMove() {
+	if !s.moveActive {
+		return
+	}
+	names := make([]string, len(s.cells))
+	for i, c := range s.cells {
+		names[i] = c.Name
+	}
+	a.api.SaveSessionOrder(names)
+	s.moveActive = false
+	s.moveOrigCells = nil
+	s.moveOrigPend = nil
+	s.render()
+}
+
+// cancelMove restores the order snapshotted by enterMoveMode and
+// exits move mode. The on-disk SessionOrder is untouched.
+func (s *Sessions) cancelMove() {
+	if !s.moveActive {
+		return
+	}
+	s.cells = s.moveOrigCells
+	s.pending = s.moveOrigPend
+	s.selIdx = s.moveOrigSelIdx
+	s.moveActive = false
+	s.moveOrigCells = nil
+	s.moveOrigPend = nil
+	s.render()
+}
+
 func (s *Sessions) render() {
 	s.view.Clear()
 	a.ui.Resize(s.view, getViewPosition(s.view.Name()))
@@ -144,7 +244,11 @@ func (s *Sessions) render() {
 	}
 	s.cols = cols
 
-	s.view.Subtitle = fmt.Sprintf(" %d sessions ", len(s.cells))
+	if s.moveActive {
+		s.view.Subtitle = " moving — hjkl reposition │ Enter drop │ Esc cancel "
+	} else {
+		s.view.Subtitle = fmt.Sprintf(" %d sessions ", len(s.cells))
+	}
 
 	if s.getLoading() {
 		fmt.Fprintln(s.view, "Loading...")
@@ -168,7 +272,8 @@ func (s *Sessions) render() {
 		// Render every cell in this row of cells, then interleave by line.
 		row := make([][]string, 0, end-start)
 		for i := start; i < end; i++ {
-			row = append(row, s.renderCell(s.cells[i], s.pendingAt(i), isFocused && i == s.selIdx))
+			isMoving := s.moveActive && i == s.selIdx
+			row = append(row, s.renderCell(s.cells[i], s.pendingAt(i), isFocused && i == s.selIdx, isMoving))
 		}
 
 		for line := 0; line < cellHeight; line++ {
@@ -211,9 +316,16 @@ func (s *Sessions) snapshot() string {
 }
 
 // renderCell returns the cellHeight strings that visually compose one cell.
-func (s *Sessions) renderCell(sess *core.Session, pending, selected bool) []string {
+// moving=true draws the cell with a yellow double-line border so the
+// "this is the one I'm dragging" cue is unmistakable in move mode.
+func (s *Sessions) renderCell(sess *core.Session, pending, selected, moving bool) []string {
 	border := cellBorderColor
-	if selected {
+	tl, tr, bl, br, h, v := "┌", "┐", "└", "┘", "─", "│"
+	switch {
+	case moving:
+		border = cellMoveColor
+		tl, tr, bl, br, h, v = "╔", "╗", "╚", "╝", "═", "║"
+	case selected:
 		border = cellSelectedColor
 	}
 
@@ -233,9 +345,9 @@ func (s *Sessions) renderCell(sess *core.Session, pending, selected bool) []stri
 	// " name(16) " — 1 + 16 + 1 = 18 ✓ (inner)
 	content := " " + nameStyled + " "
 
-	top := border.Sprint("┌" + strings.Repeat("─", inner) + "┐")
-	bot := border.Sprint("└" + strings.Repeat("─", inner) + "┘")
-	edge := border.Sprint("│")
+	top := border.Sprint(tl + strings.Repeat(h, inner) + tr)
+	bot := border.Sprint(bl + strings.Repeat(h, inner) + br)
+	edge := border.Sprint(v)
 
 	return []string{
 		top,
@@ -298,6 +410,10 @@ func (s *Sessions) init() {
 		if len(s.cells) == 0 || s.cols == 0 {
 			return
 		}
+		if s.moveActive {
+			s.moveCell(-1)
+			return
+		}
 		row := s.selIdx / s.cols
 		col := s.selIdx % s.cols
 		if col == 0 {
@@ -315,6 +431,10 @@ func (s *Sessions) init() {
 		if len(s.cells) == 0 || s.cols == 0 {
 			return
 		}
+		if s.moveActive {
+			s.moveCell(1)
+			return
+		}
 		row := s.selIdx / s.cols
 		atRowEnd := (s.selIdx+1)%s.cols == 0 || s.selIdx == len(s.cells)-1
 		if atRowEnd {
@@ -328,6 +448,10 @@ func (s *Sessions) init() {
 		if len(s.cells) == 0 || s.cols == 0 {
 			return
 		}
+		if s.moveActive {
+			s.moveCell(s.cols)
+			return
+		}
 		next := s.selIdx + s.cols
 		if next >= len(s.cells) {
 			s.selIdx = s.selIdx % s.cols
@@ -338,6 +462,10 @@ func (s *Sessions) init() {
 	}
 	up := func() {
 		if len(s.cells) == 0 || s.cols == 0 {
+			return
+		}
+		if s.moveActive {
+			s.moveCell(-s.cols)
 			return
 		}
 		prev := s.selIdx - s.cols
@@ -360,14 +488,27 @@ func (s *Sessions) init() {
 		Set('l', "Move right", right).
 		Set('j', "Move down", down).
 		Set('k', "Move up", up).
-		Set(gocui.KeyEnter, "Open session", func() {
+		Set(gocui.KeyEnter, "Open session / drop", func() {
+			if s.moveActive {
+				s.commitMove()
+				return
+			}
 			session := s.selected()
 			if session == nil {
 				return
 			}
 			s.attach(session)
 		}).
+		Set(gocui.KeyEsc, "Cancel move", func() {
+			s.cancelMove()
+		}).
+		Set('m', "Move session", func() {
+			s.enterMoveMode()
+		}).
 		Set('D', "Kill session", func() {
+			if s.moveActive {
+				return
+			}
 			session := s.selected()
 			if session == nil {
 				return
@@ -385,6 +526,9 @@ func (s *Sessions) init() {
 			}, fmt.Sprintf("Are you sure you want to delete session for %s?", session.DisplayName()))
 		}).
 		Set('a', "Create a session", func() {
+			if s.moveActive {
+				return
+			}
 			editor(func(name string) {
 				session, err := a.api.NewSession(name)
 				if err != nil {
@@ -395,6 +539,9 @@ func (s *Sessions) init() {
 			}, func() {}, "Session Name", smallEditorSize, "")
 		}).
 		Set('n', "Edit session note", func() {
+			if s.moveActive {
+				return
+			}
 			session := s.selected()
 			if session == nil {
 				return
@@ -417,7 +564,7 @@ func (s *Sessions) init() {
 		defer t.Stop()
 		var prev string
 		refresh := func() {
-			if a.attached.Load() {
+			if a.attached.Load() || s.moveActive {
 				return
 			}
 			selected := s.selected()
