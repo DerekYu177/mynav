@@ -322,6 +322,21 @@ func (a *API) OpenWorkspace(w *Workspace) error {
 	return session.Attach()
 }
 
+// SessionOrder returns the user-curated session ordering (tmux names),
+// or nil if the user has never reordered. The Sessions view uses this
+// to sort cells before falling back to created-time.
+func (a *API) SessionOrder() []string {
+	return a.local.SessionOrder()
+}
+
+// SaveSessionOrder persists a user-curated session ordering. Caller
+// supplies the full list of currently visible tmux names in the order
+// the user wants. Stale entries (sessions since killed) are tolerated
+// and overwritten on the next call.
+func (a *API) SaveSessionOrder(order []string) {
+	a.local.SetSessionOrder(order)
+}
+
 // SessionComment returns the saved comment for a session, keyed by tmux name.
 func (a *API) SessionComment(s *Session) string {
 	if s == nil {
