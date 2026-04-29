@@ -1,9 +1,11 @@
 package core
 
 import (
-	"os"
-	"path/filepath"
-	"sort"
+	"bufio"
+	"fmt"
+	"os/exec"
+	"strings"
+	"sync"
 
 	"github.com/GianlucaP106/gotmux/gotmux"
 )
@@ -14,12 +16,12 @@ import (
 // without this option are invisible to the worktree-sync feature.
 const MynavWorktreeOption = "@mynav-worktree"
 
-// Worktree is a directory directly under the configured worktree root
-// that contains a `.git` entry — i.e. a real git worktree that should
-// have a tmux session.
+// Worktree is one entry produced by the user-configured listing
+// command: the tmux session name to use, and the absolute path that
+// the session's working directory should be set to.
 type Worktree struct {
-	Name string // basename
-	Path string // absolute
+	Name string
+	Path string
 }
 
 // ManagedSession is a tmux session whose @mynav-worktree option is
@@ -29,51 +31,49 @@ type ManagedSession struct {
 	MarkerPath string
 }
 
-// IsPending reports whether the marker path no longer resolves to a
-// git worktree on disk. Pending sessions are rendered dimmed in the
-// grid; mynav never kills them — that's the user's call.
-func (m ManagedSession) IsPending() bool {
+// IsPending reports whether the marker path is absent from the
+// supplied live-set. mynav never kills these sessions — pending is a
+// render-only state for the user to clean up.
+func (m ManagedSession) IsPending(live map[string]struct{}) bool {
 	if m.MarkerPath == "" {
 		return false
 	}
-	return !isWorktreeDir(m.MarkerPath)
+	_, ok := live[m.MarkerPath]
+	return !ok
 }
 
-// listWorktrees returns directories directly under root that look
-// like git worktrees, sorted by name. Missing root is treated as
-// "no worktrees" so a misconfigured field doesn't crash the goroutine.
-func listWorktrees(root string) ([]Worktree, error) {
-	if root == "" {
+// listWorktrees runs the user-configured command via `sh -c` and
+// parses each stdout line as `<tmux-name>\t<absolute-path>`. Empty
+// cmd returns nil so a misconfigured field is the same as opt-out.
+// Lines that don't have exactly two non-empty fields are skipped, so
+// the wrapper can emit blanks or headers without breaking us.
+func listWorktrees(cmd string) ([]Worktree, error) {
+	if cmd == "" {
 		return nil, nil
 	}
-	entries, err := os.ReadDir(root)
+	c := exec.Command("sh", "-c", cmd)
+	out, err := c.Output()
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
+		if ee, ok := err.(*exec.ExitError); ok {
+			return nil, fmt.Errorf("worktree-list-cmd failed: %w: %s", err, strings.TrimSpace(string(ee.Stderr)))
 		}
 		return nil, err
 	}
-	out := make([]Worktree, 0, len(entries))
-	for _, e := range entries {
-		if !e.IsDir() {
+	var wts []Worktree
+	sc := bufio.NewScanner(strings.NewReader(string(out)))
+	for sc.Scan() {
+		parts := strings.SplitN(sc.Text(), "\t", 2)
+		if len(parts) != 2 {
 			continue
 		}
-		p := filepath.Join(root, e.Name())
-		if !isWorktreeDir(p) {
+		name := strings.TrimSpace(parts[0])
+		path := strings.TrimSpace(parts[1])
+		if name == "" || path == "" {
 			continue
 		}
-		out = append(out, Worktree{Name: e.Name(), Path: p})
+		wts = append(wts, Worktree{Name: name, Path: path})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out, nil
-}
-
-// isWorktreeDir is true iff path/.git exists. Linked worktrees have
-// `.git` as a file pointing at the main repo's worktrees dir; the
-// main repo has it as a directory. Both are valid here.
-func isWorktreeDir(path string) bool {
-	_, err := os.Stat(filepath.Join(path, ".git"))
-	return err == nil
+	return wts, sc.Err()
 }
 
 // tmuxClient is the slice of gotmux behavior Reconciler depends on.
@@ -99,10 +99,19 @@ func (g *gotmuxClient) listManaged() ([]ManagedSession, error) {
 		// gotmux wraps tmux's "option not set" exit as a generic
 		// error; we can't tell that case from a real failure, so
 		// we treat any error or empty value as "not managed".
-		if err != nil || opt == nil || opt.Value == "" {
+		if err != nil || opt == nil {
 			continue
 		}
-		out = append(out, ManagedSession{Name: s.Name, MarkerPath: opt.Value})
+		// gotmux returns the raw command output, which keeps the
+		// trailing newline tmux emits. Without trimming we'd compare
+		// "<path>\n" against the clean path produced by the listing
+		// command and skip every "have" check, creating a duplicate
+		// session every tick.
+		v := strings.TrimSpace(opt.Value)
+		if v == "" {
+			continue
+		}
+		out = append(out, ManagedSession{Name: s.Name, MarkerPath: v})
 	}
 	return out, nil
 }
@@ -119,22 +128,27 @@ func (g *gotmuxClient) createManaged(name, path string) error {
 }
 
 // Reconciler ensures one managed tmux session exists per worktree
-// directly under root. It only ever creates sessions; it never kills
-// them. When a worktree disappears, the matching session enters the
-// pending state and waits for the user to clean it up manually.
+// reported by the configured listing command. It only ever creates
+// sessions; it never kills them. When a worktree disappears from the
+// listing the matching session enters the pending state and waits
+// for the user to clean it up manually.
 type Reconciler struct {
 	client tmuxClient
-	root   string
+	cmd    string
+
+	mu    sync.RWMutex
+	live  map[string]struct{}
+	ready bool
 }
 
 // NewReconciler wires up a Reconciler against the real tmux server.
-func NewReconciler(t *gotmux.Tmux, root string) *Reconciler {
-	return &Reconciler{client: &gotmuxClient{t: t}, root: root}
+func NewReconciler(t *gotmux.Tmux, cmd string) *Reconciler {
+	return &Reconciler{client: &gotmuxClient{t: t}, cmd: cmd}
 }
 
-// Root returns the worktree root the reconciler watches, or "" when
-// the feature is disabled.
-func (r *Reconciler) Root() string { return r.root }
+// Cmd returns the configured listing command, or "" when the feature
+// is disabled.
+func (r *Reconciler) Cmd() string { return r.cmd }
 
 // ManagedSessions returns the current managed-session set as seen by
 // the reconciler — used by the UI render to detect pending state.
@@ -142,14 +156,32 @@ func (r *Reconciler) ManagedSessions() ([]ManagedSession, error) {
 	return r.client.listManaged()
 }
 
+// LiveMarkers returns a copy of the marker paths the most recent
+// successful Tick observed, plus a `ready` flag. When ready is false
+// (no Tick has succeeded yet) callers should treat all sessions as
+// non-pending — we don't know what's live, and stale dimming is
+// worse than no dimming.
+func (r *Reconciler) LiveMarkers() (map[string]struct{}, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if !r.ready {
+		return nil, false
+	}
+	out := make(map[string]struct{}, len(r.live))
+	for k := range r.live {
+		out[k] = struct{}{}
+	}
+	return out, true
+}
+
 // Tick runs one reconciliation pass: any worktree without a session
 // gets one. A failure on any single worktree aborts the pass; the
-// next tick will retry. No-op when root is unset.
+// next tick will retry. No-op when cmd is empty.
 func (r *Reconciler) Tick() error {
-	if r.root == "" {
+	if r.cmd == "" {
 		return nil
 	}
-	wts, err := listWorktrees(r.root)
+	wts, err := listWorktrees(r.cmd)
 	if err != nil {
 		return err
 	}
@@ -161,7 +193,9 @@ func (r *Reconciler) Tick() error {
 	for _, s := range sessions {
 		have[s.MarkerPath] = struct{}{}
 	}
+	live := make(map[string]struct{}, len(wts))
 	for _, w := range wts {
+		live[w.Path] = struct{}{}
 		if _, ok := have[w.Path]; ok {
 			continue
 		}
@@ -169,5 +203,9 @@ func (r *Reconciler) Tick() error {
 			return err
 		}
 	}
+	r.mu.Lock()
+	r.live = live
+	r.ready = true
+	r.mu.Unlock()
 	return nil
 }

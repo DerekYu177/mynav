@@ -50,7 +50,7 @@ func NewApi(dir string) (*API, error) {
 	api.local = local
 	api.global = global
 	api.updater = &updater{}
-	api.reconciler = NewReconciler(tmux, local.WorktreeRoot())
+	api.reconciler = NewReconciler(tmux, local.WorktreeListCmd())
 
 	// Reconcile worktree → session mapping when the feature is opted
 	// into. The reconciler only ever creates sessions; pending state
@@ -61,7 +61,7 @@ func NewApi(dir string) (*API, error) {
 }
 
 func (a *API) runReconciler() {
-	if a.reconciler == nil || a.reconciler.Root() == "" {
+	if a.reconciler == nil || a.reconciler.Cmd() == "" {
 		return
 	}
 	// One eager pass at startup so worktrees that exist before mynav
@@ -76,11 +76,17 @@ func (a *API) runReconciler() {
 }
 
 // PendingSessions returns the set of managed session names whose
-// backing worktree has been removed. Sessions named in the result
-// should render dimmed; mynav never kills them. Returns nil when the
-// feature is disabled, which the renderer treats as "no pending."
+// backing worktree has dropped out of the listing command's output.
+// Sessions named in the result should render dimmed; mynav never
+// kills them. Returns nil when the feature is disabled, or before
+// the first reconciler tick has succeeded — stale dimming is worse
+// than no dimming.
 func (a *API) PendingSessions() map[string]bool {
-	if a.reconciler == nil || a.reconciler.Root() == "" {
+	if a.reconciler == nil || a.reconciler.Cmd() == "" {
+		return nil
+	}
+	live, ready := a.reconciler.LiveMarkers()
+	if !ready {
 		return nil
 	}
 	sessions, err := a.reconciler.ManagedSessions()
@@ -89,7 +95,7 @@ func (a *API) PendingSessions() map[string]bool {
 	}
 	out := make(map[string]bool, len(sessions))
 	for _, s := range sessions {
-		if s.IsPending() {
+		if s.IsPending(live) {
 			out[s.Name] = true
 		}
 	}
