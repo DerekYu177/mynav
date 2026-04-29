@@ -12,12 +12,13 @@ import (
 type LocalConfigData struct {
 	SelectedWorkspace string            `json:"selected-workspace"`
 	SessionComments   map[string]string `json:"session-comments,omitempty"`
-	// WorktreeRoot, when set, opts the user into worktree → session
-	// auto-sync: any directory directly under this path that is itself
-	// a git worktree gets a tmux session created for it. Sessions whose
-	// backing worktree disappears render as pending in the grid; mynav
-	// never kills sessions on its own.
-	WorktreeRoot string `json:"worktree-root,omitempty"`
+	// WorktreeListCmd, when set, opts the user into worktree → session
+	// auto-sync. mynav runs the command via `sh -c` every couple of
+	// seconds; each stdout line names a session to manage as
+	// `<tmux-name>\t<absolute-path>`. Sessions whose path stops
+	// appearing render as pending in the grid; mynav never kills
+	// sessions on its own.
+	WorktreeListCmd string `json:"worktree-list-cmd,omitempty"`
 	// SessionOrder is a user-curated ordering of tmux session names,
 	// produced by the move-mode UI in the Sessions view. Sessions in
 	// this list sort first, in their listed order; sessions absent
@@ -159,10 +160,10 @@ func (l *LocalConfig) ConfigData() *LocalConfigData {
 	return l.datasource.Get()
 }
 
-// WorktreeRoot returns the configured worktree root (absolute path),
-// or "" if the user has not opted in.
-func (l *LocalConfig) WorktreeRoot() string {
-	return l.datasource.Get().WorktreeRoot
+// WorktreeListCmd returns the configured listing command, or "" if
+// the user has not opted in.
+func (l *LocalConfig) WorktreeListCmd() string {
+	return l.datasource.Get().WorktreeListCmd
 }
 
 // SessionOrder returns the user-curated session ordering (tmux names).

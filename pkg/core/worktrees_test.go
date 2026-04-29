@@ -2,8 +2,6 @@ package core
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 )
 
@@ -26,22 +24,7 @@ func (f *fakeTmux) createManaged(name, path string) error {
 	return nil
 }
 
-// makeWorktree creates a fake worktree at root/name by writing a .git
-// file with the linked-worktree gitfile syntax. Mirrors what `git
-// worktree add` does for a linked worktree.
-func makeWorktree(t *testing.T, root, name string) string {
-	t.Helper()
-	p := filepath.Join(root, name)
-	if err := os.MkdirAll(p, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(p, ".git"), []byte("gitdir: ../.git/worktrees/"+name), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return p
-}
-
-func TestListWorktreesEmptyRoot(t *testing.T) {
+func TestListWorktreesEmptyCmd(t *testing.T) {
 	out, err := listWorktrees("")
 	if err != nil {
 		t.Fatal(err)
@@ -51,67 +34,55 @@ func TestListWorktreesEmptyRoot(t *testing.T) {
 	}
 }
 
-func TestListWorktreesMissingRoot(t *testing.T) {
-	out, err := listWorktrees(filepath.Join(t.TempDir(), "does-not-exist"))
+func TestListWorktreesParsesTabSeparated(t *testing.T) {
+	out, err := listWorktrees(`printf 'alpha\t/a\nbravo\t/b\n'`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(out) != 0 {
+	if len(out) != 2 {
+		t.Fatalf("got %v", out)
+	}
+	if out[0] != (Worktree{Name: "alpha", Path: "/a"}) {
+		t.Errorf("got %+v", out[0])
+	}
+	if out[1] != (Worktree{Name: "bravo", Path: "/b"}) {
+		t.Errorf("got %+v", out[1])
+	}
+}
+
+func TestListWorktreesSkipsBadLines(t *testing.T) {
+	// Tolerate blank lines, single-field lines, and lines with empty
+	// fields — the wrapper might emit headers or stray whitespace.
+	out, err := listWorktrees(`printf 'header_only\nalpha\t/a\n\nlone\n\t/onlypath\nname\t\n'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 1 || out[0].Name != "alpha" || out[0].Path != "/a" {
 		t.Fatalf("got %v", out)
 	}
 }
 
-func TestListWorktreesSkipsNonWorktrees(t *testing.T) {
-	root := t.TempDir()
-	makeWorktree(t, root, "real")
-	if err := os.MkdirAll(filepath.Join(root, "notawt"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "file.txt"), []byte(""), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	out, err := listWorktrees(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(out) != 1 || out[0].Name != "real" {
-		t.Fatalf("got %v", out)
-	}
-}
-
-func TestListWorktreesSorted(t *testing.T) {
-	root := t.TempDir()
-	makeWorktree(t, root, "charlie")
-	makeWorktree(t, root, "alpha")
-	makeWorktree(t, root, "bravo")
-	out, err := listWorktrees(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	names := []string{out[0].Name, out[1].Name, out[2].Name}
-	want := []string{"alpha", "bravo", "charlie"}
-	for i := range names {
-		if names[i] != want[i] {
-			t.Errorf("order: got %v, want %v", names, want)
-		}
+func TestListWorktreesCommandError(t *testing.T) {
+	_, err := listWorktrees(`exit 1`)
+	if err == nil {
+		t.Fatal("expected error from failing cmd")
 	}
 }
 
 func TestIsPending(t *testing.T) {
-	root := t.TempDir()
-	live := makeWorktree(t, root, "live")
+	live := map[string]struct{}{"/a": {}}
 	tests := []struct {
 		name string
 		s    ManagedSession
 		want bool
 	}{
-		{"live worktree not pending", ManagedSession{Name: "live", MarkerPath: live}, false},
-		{"missing worktree pending", ManagedSession{Name: "ghost", MarkerPath: filepath.Join(root, "ghost")}, true},
-		{"unmarked session not pending", ManagedSession{Name: "x"}, false},
+		{"in live set not pending", ManagedSession{Name: "live", MarkerPath: "/a"}, false},
+		{"absent path pending", ManagedSession{Name: "ghost", MarkerPath: "/b"}, true},
+		{"unmarked not pending", ManagedSession{Name: "x"}, false},
 	}
 	for _, c := range tests {
 		t.Run(c.name, func(t *testing.T) {
-			if got := c.s.IsPending(); got != c.want {
+			if got := c.s.IsPending(live); got != c.want {
 				t.Errorf("got %v, want %v", got, c.want)
 			}
 		})
@@ -119,14 +90,11 @@ func TestIsPending(t *testing.T) {
 }
 
 func TestReconcileCreatesMissingSessions(t *testing.T) {
-	root := t.TempDir()
-	a := makeWorktree(t, root, "alpha")
-	b := makeWorktree(t, root, "bravo")
-
+	cmd := `printf 'alpha\t/a\nbravo\t/b\n'`
 	fake := &fakeTmux{
-		sessions: []ManagedSession{{Name: "alpha", MarkerPath: a}},
+		sessions: []ManagedSession{{Name: "alpha", MarkerPath: "/a"}},
 	}
-	r := &Reconciler{client: fake, root: root}
+	r := &Reconciler{client: fake, cmd: cmd}
 	if err := r.Tick(); err != nil {
 		t.Fatal(err)
 	}
@@ -134,19 +102,18 @@ func TestReconcileCreatesMissingSessions(t *testing.T) {
 	if len(fake.creates) != 1 {
 		t.Fatalf("expected 1 create, got %d: %v", len(fake.creates), fake.creates)
 	}
-	if fake.creates[0].Name != "bravo" || fake.creates[0].MarkerPath != b {
-		t.Errorf("got %+v, want bravo @ %s", fake.creates[0], b)
+	if fake.creates[0].Name != "bravo" || fake.creates[0].MarkerPath != "/b" {
+		t.Errorf("got %+v, want bravo @ /b", fake.creates[0])
 	}
 }
 
 func TestReconcileNeverKills(t *testing.T) {
-	root := t.TempDir()
-	// No worktrees on disk, but a managed session points at one.
-	ghost := filepath.Join(root, "ghost")
+	// Listing emits nothing, but a managed session points at a path
+	// that no longer appears. Tick must not remove it.
 	fake := &fakeTmux{
-		sessions: []ManagedSession{{Name: "ghost", MarkerPath: ghost}},
+		sessions: []ManagedSession{{Name: "ghost", MarkerPath: "/ghost"}},
 	}
-	r := &Reconciler{client: fake, root: root}
+	r := &Reconciler{client: fake, cmd: `printf ''`}
 	if err := r.Tick(); err != nil {
 		t.Fatal(err)
 	}
@@ -158,27 +125,29 @@ func TestReconcileNeverKills(t *testing.T) {
 	}
 }
 
-func TestReconcileEmptyRootIsNoOp(t *testing.T) {
+func TestReconcileEmptyCmdIsNoOp(t *testing.T) {
 	fake := &fakeTmux{}
-	r := &Reconciler{client: fake, root: ""}
+	r := &Reconciler{client: fake, cmd: ""}
 	if err := r.Tick(); err != nil {
 		t.Fatal(err)
 	}
 	if len(fake.creates) != 0 {
 		t.Errorf("disabled feature should not create anything: %v", fake.creates)
 	}
+	if _, ready := r.LiveMarkers(); ready {
+		t.Errorf("disabled feature should never become ready")
+	}
 }
 
 func TestReconcileIdempotent(t *testing.T) {
-	root := t.TempDir()
-	a := makeWorktree(t, root, "alpha")
+	cmd := `printf 'alpha\t/a\n'`
 	fake := &fakeTmux{}
-	r := &Reconciler{client: fake, root: root}
+	r := &Reconciler{client: fake, cmd: cmd}
 
 	if err := r.Tick(); err != nil {
 		t.Fatal(err)
 	}
-	if len(fake.creates) != 1 || fake.creates[0].MarkerPath != a {
+	if len(fake.creates) != 1 || fake.creates[0].MarkerPath != "/a" {
 		t.Fatalf("first tick: got %v", fake.creates)
 	}
 
@@ -191,9 +160,7 @@ func TestReconcileIdempotent(t *testing.T) {
 }
 
 func TestReconcileCreateErrorAborts(t *testing.T) {
-	root := t.TempDir()
-	makeWorktree(t, root, "alpha")
-	makeWorktree(t, root, "bravo")
+	cmd := `printf 'alpha\t/a\nbravo\t/b\n'`
 	want := errors.New("boom")
 	fake := &fakeTmux{
 		createFn: func(name, _ string) error {
@@ -203,12 +170,41 @@ func TestReconcileCreateErrorAborts(t *testing.T) {
 			return nil
 		},
 	}
-	r := &Reconciler{client: fake, root: root}
+	r := &Reconciler{client: fake, cmd: cmd}
 	if err := r.Tick(); !errors.Is(err, want) {
 		t.Errorf("got %v, want %v", err, want)
 	}
-	// alpha attempted, bravo skipped — next tick will retry.
 	if len(fake.creates) != 0 {
 		t.Errorf("create should have failed before recording: %v", fake.creates)
+	}
+	// Failed Tick should not flip to ready — stale live set would
+	// produce wrong pending-state on the next render.
+	if _, ready := r.LiveMarkers(); ready {
+		t.Errorf("failed Tick must not mark reconciler ready")
+	}
+}
+
+func TestLiveMarkersUpdatedAfterTick(t *testing.T) {
+	cmd := `printf 'alpha\t/a\nbravo\t/b\n'`
+	fake := &fakeTmux{}
+	r := &Reconciler{client: fake, cmd: cmd}
+
+	if _, ready := r.LiveMarkers(); ready {
+		t.Errorf("reconciler should not be ready before first Tick")
+	}
+
+	if err := r.Tick(); err != nil {
+		t.Fatal(err)
+	}
+
+	live, ready := r.LiveMarkers()
+	if !ready {
+		t.Fatal("expected ready after successful Tick")
+	}
+	if _, ok := live["/a"]; !ok {
+		t.Errorf("/a missing from live set: %v", live)
+	}
+	if _, ok := live["/b"]; !ok {
+		t.Errorf("/b missing from live set: %v", live)
 	}
 }
