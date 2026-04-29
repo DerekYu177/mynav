@@ -3,6 +3,7 @@ package core
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/GianlucaP106/gotmux/gotmux"
@@ -341,6 +342,22 @@ func (a *API) SessionOrder() []string {
 // and overwritten on the next call.
 func (a *API) SaveSessionOrder(order []string) {
 	a.local.SetSessionOrder(order)
+}
+
+// SessionWorktreePath returns the worktree marker path for a session,
+// or "" when the session has no @mynav-worktree user-option set
+// (i.e., is not managed by the worktree-sync feature). gotmux retains
+// the trailing newline tmux emits for option values; we trim before
+// returning so callers can use the result as a clean filesystem path.
+func (a *API) SessionWorktreePath(s *Session) string {
+	if s == nil || s.Session == nil {
+		return ""
+	}
+	opt, err := s.Option(MynavWorktreeOption)
+	if err != nil || opt == nil {
+		return ""
+	}
+	return strings.TrimSpace(opt.Value)
 }
 
 // SessionComment returns the saved comment for a session, keyed by tmux name.
